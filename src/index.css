@@ -1,1 +1,39 @@
 @import "tailwindcss";
+
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #fff; background: #08090c; }
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button { font: inherit; }
+.game, .canvas { position: fixed; inset: 0; }
+.canvas canvas { width: 100%; height: 100%; display: block; }
+.panel { position: fixed; inset: 0; z-index: 2; pointer-events: none; background: linear-gradient(90deg, rgba(6,8,12,.94), rgba(6,8,12,.48) 43%, transparent 72%); }
+.panel.racing { background: transparent; }
+.topbar { height: 82px; display: flex; align-items: center; justify-content: space-between; padding: 0 44px; border-bottom: 1px solid rgba(255,255,255,.12); pointer-events: auto; }
+.brand { font-weight: 900; font-size: 25px; letter-spacing: .06em; }
+.brand span { color: #f59e0b; }
+.level { color: #94a3b8; font-size: 12px; letter-spacing: .22em; }
+.map-picker { position: absolute; left: 44px; bottom: 190px; width: 430px; pointer-events: auto; }
+.eyebrow { margin: 0 0 8px; color: #f59e0b; font-size: 12px; font-weight: 800; letter-spacing: .18em; }
+.map-picker h1 { margin: 0; font-size: clamp(42px, 5vw, 76px); line-height: .92; letter-spacing: -.04em; text-transform: uppercase; text-wrap: balance; }
+.subtitle { margin: 14px 0 18px; color: #bac1cc; }
+.details { display: flex; gap: 28px; }
+.details span { color: #94a3b8; font-size: 11px; letter-spacing: .12em; }
+.details b { display: block; color: white; font-size: 20px; letter-spacing: 0; margin-bottom: 3px; }
+.launch { margin-top: 28px; width: 210px; height: 54px; border: 0; border-radius: 4px; background: #f59e0b; color: #09090b; font-weight: 900; letter-spacing: .08em; pointer-events: auto; cursor: pointer; }
+.launch span { float: right; font-size: 25px; line-height: 10px; }
+.map-list { position: absolute; right: 32px; bottom: 32px; width: 360px; display: grid; gap: 8px; pointer-events: auto; }
+.map-list button { height: 68px; display: flex; align-items: center; gap: 14px; text-align: left; border: 1px solid rgba(255,255,255,.12); border-radius: 5px; background: rgba(13,15,20,.88); color: white; padding: 8px 14px; cursor: pointer; }
+.map-list button.active { border-color: #f59e0b; background: rgba(245,158,11,.16); }
+.map-number { width: 38px; color: #94a3b8; font-family: monospace; }
+.map-list strong, .map-list small { display: block; }
+.map-list strong { font-size: 14px; }
+.map-list small { margin-top: 3px; color: #94a3b8; }
+.race-top { position: absolute; top: 20px; left: 20px; display: flex; gap: 8px; pointer-events: auto; }
+.race-top div { min-width: 100px; background: rgba(13,15,20,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 10px 14px; }
+.race-top span { display: block; color: #94a3b8; font-size: 9px; letter-spacing: .12em; }
+.race-top strong { font-size: 20px; }
+.exit { position: absolute; top: 20px; right: 20px; height: 38px; border-radius: 5px; background: rgba(13,15,20,.88); color: white; padding: 0 14px; pointer-events: auto; cursor: pointer; }
+.speedometer { position: absolute; right: 22px; bottom: 22px; width: 150px; background: rgba(13,15,20,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 12px 18px; }
+.speedometer strong { font-size: 46px; line-height: 1; }
+.speedometer span { margin-left: 5px; color: #94a3b8; font-size: 11px; }
+@media (max-width: 800px) { .topbar { padding: 0 20px; } .map-picker { left: 20px; bottom: 300px; width: calc(100% - 40px); } .map-picker h1 { font-size: 42px; } .map-list { left: 20px; right: 20px; bottom: 20px; width: auto; grid-template-columns: 1fr 1fr; } .map-list button { height: 62px; } }
