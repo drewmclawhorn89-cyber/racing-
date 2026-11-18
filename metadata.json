@@ -1,0 +1,6 @@
+{
+  "name": "Apex Rush Racing",
+  "description": "Realistic 3D browser racing game with 8 customizable cars, 4 tracks, AI opponents, ghost time trials, free roam, photo mode, and Web Audio synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
