@@ -1,257 +1,664 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import * as THREE from 'three';
-import { getLeaderboard, saveRecord, type RaceRecord } from './leaderboard';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { User } from 'firebase/auth';
+import {
+  Coins,
+  Crown,
+  Gamepad2,
+  LogIn,
+  LogOut,
+  Palette,
+  Play,
+  Shield,
+  ShoppingBag,
+  Smartphone,
+  Trophy,
+  Users,
+  Wrench
+} from 'lucide-react';
+import {
+  addBrFriend,
+  createDefaultBrPlayer,
+  fetchBrFriends,
+  fetchBrLeaderboard,
+  fetchDailyShop,
+  loadOrCreateBrPlayer,
+  recordBrMatch,
+  saveBrInventoryItem,
+  saveBrPlayer,
+  signInWithGoogle,
+  signOutGoogle,
+  subscribeAuth,
+  updateBrFriendStatus,
+  type BrFriendRecord,
+  type BrInventoryEntry,
+  type BrMatchRecord,
+  type BrPlayerProfile,
+  type BrShopItemRecord
+} from './firebase';
+import {
+  DAILY_QUESTS,
+  getStarterOwnedIds,
+  getTodayKey,
+  xpForLevel,
+  type CosmeticItem,
+  type EmoteId,
+  type GameMode,
+  type PlayerLoadout
+} from './game/catalog';
+import { soundEngine } from './game/audio';
+import { BattleRoyaleEngine, type HudSnapshot, type MatchResult } from './game/engine';
+import { brOnline, type PartyState } from './online';
+import { LeaderboardPanel } from './components/LeaderboardPanel';
+import { LockerPanel } from './components/LockerPanel';
+import { MatchHud } from './components/MatchHud';
+import { ShopPassPanel } from './components/ShopPassPanel';
+import { SocialPanel } from './components/SocialPanel';
 
-type MapTheme = {
-  name: string;
-  subtitle: string;
-  distance: string;
-  laps: number;
-  sky: number;
-  ground: number;
-  road: number;
-  accent: number;
-  shape: 'oval' | 'city' | 'figure' | 'mountain';
-};
-
-const maps: MapTheme[] = [
-  { name: 'Sunset Speedway', subtitle: 'Fast oval · Evening', distance: '3.2 KM', laps: 3, sky: 0xd96531, ground: 0x8a6947, road: 0x25262a, accent: 0xf59e0b, shape: 'oval' },
-  { name: 'Neon District', subtitle: 'Technical street circuit', distance: '4.8 KM', laps: 3, sky: 0x17132e, ground: 0x111827, road: 0x17191f, accent: 0x06b6d4, shape: 'city' },
-  { name: 'Alpine Pass', subtitle: 'Mountain switchbacks', distance: '5.6 KM', laps: 2, sky: 0x77b5d9, ground: 0x4d6550, road: 0x46474b, accent: 0x10b981, shape: 'mountain' },
-  { name: 'Diamond Ring', subtitle: 'Figure-eight challenge', distance: '3.9 KM', laps: 4, sky: 0x7d93ac, ground: 0x9e9b79, road: 0x303137, accent: 0xef4444, shape: 'figure' },
-];
-
-function buildTrack(shape: MapTheme['shape']): THREE.CatmullRomCurve3 {
-  let points: THREE.Vector3[];
-  if (shape === 'oval') {
-    points = Array.from({ length: 24 }, (_, i) => {
-      const a = i / 24 * Math.PI * 2;
-      return new THREE.Vector3(Math.cos(a) * 48, 0, Math.sin(a) * 27);
-    });
-  } else if (shape === 'city') {
-    points = [[-36,-24],[18,-25],[34,-12],[28,18],[10,25],[-18,20],[-38,8],[-36,-24]].map(([x,z]) => new THREE.Vector3(x, 0, z));
-  } else if (shape === 'mountain') {
-    points = Array.from({ length: 28 }, (_, i) => {
-      const a = i / 28 * Math.PI * 2;
-      const r = 32 + Math.sin(a * 3) * 8;
-      return new THREE.Vector3(Math.cos(a) * r, Math.sin(a * 2) * 2, Math.sin(a) * r);
-    });
-  } else {
-    points = [[-48,-4],[-30,-20],[0,-18],[22,-4],[44,-4],[22,4],[0,18],[-30,20],[-48,4],[-48,-4]].map(([x,z]) => new THREE.Vector3(x, 0, z));
-  }
-  return new THREE.CatmullRomCurve3(points, true, 'catmullrom', 0.12);
-}
-
-function formatTime(milliseconds: number) {
-  const seconds = milliseconds / 1000;
-  return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, '0')}`;
-}
+type ActiveModal = 'none' | 'shop' | 'locker' | 'leaderboard' | 'social';
 
 export default function App() {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const [selected, setSelected] = useState(0);
-  const [started, setStarted] = useState(false);
-  const [speed, setSpeed] = useState(0);
-  const [records, setRecords] = useState<RaceRecord[]>([]);
-  const [playerName, setPlayerName] = useState(() => localStorage.getItem('apex-player-name') || 'Racer');
-  const [databaseStatus, setDatabaseStatus] = useState('Connecting to online records…');
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState('');
-  const raceStartedAt = useRef(0);
-  const map = maps[selected];
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const engineRef = useRef<BattleRoyaleEngine | null>(null);
 
-  const refreshRecords = useCallback(async () => {
-    try {
-      const next = await getLeaderboard(map.name);
-      setRecords(next);
-      setDatabaseStatus('ONLINE · SUPABASE');
-    } catch (error) {
-      setRecords([]);
-      setDatabaseStatus(error instanceof Error ? error.message : 'Could not load online records');
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<BrPlayerProfile>(() => createDefaultBrPlayer('guest_local'));
+  const [inventory, setInventory] = useState<BrInventoryEntry[]>([]);
+  const [shopItems, setShopItems] = useState<BrShopItemRecord[]>([]);
+  const [friends, setFriends] = useState<BrFriendRecord[]>([]);
+  const [leaderboard, setLeaderboard] = useState<{ players: BrPlayerProfile[]; matches: BrMatchRecord[] }>({
+    players: [],
+    matches: []
+  });
+
+  const [modal, setModal] = useState<ActiveModal>('none');
+  const [selectedFamily, setSelectedFamily] = useState<'br' | 'zerobuild' | 'creative'>('br');
+  const [brSubMode, setBrSubMode] = useState<'solo' | 'duo' | 'squad'>('solo');
+  const [muted, setMuted] = useState(false);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' ? navigator.maxTouchPoints > 0 || window.innerWidth < 820 : false
+  );
+
+  const [party, setParty] = useState<PartyState | null>(null);
+  const [partyChat, setPartyChat] = useState<{ sender: string; text: string }[]>([]);
+  const [pendingInvite, setPendingInvite] = useState<{ partyCode: string; fromName: string } | null>(null);
+  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+
+  const [hud, setHud] = useState<HudSnapshot | null>(null);
+
+  const activeMode: GameMode =
+    selectedFamily === 'br' ? brSubMode : selectedFamily === 'zerobuild' ? 'zerobuild' : 'creative';
+
+  const ownedItemIds = useMemo(() => {
+    const s = new Set<string>(getStarterOwnedIds());
+    for (const entry of inventory) {
+      s.add(entry.item_id);
     }
-  }, [map.name]);
+    return s;
+  }, [inventory]);
 
-  useEffect(() => { void refreshRecords(); }, [refreshRecords]);
-
+  // Ref for latest profile & user inside engine callbacks
+  const profileRef = useRef(profile);
+  const userRef = useRef(user);
   useEffect(() => {
-    if (!mountRef.current) return;
-    const mount = mountRef.current;
-    mount.innerHTML = '';
+    profileRef.current = profile;
+  }, [profile]);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(map.sky);
-    scene.fog = new THREE.Fog(map.sky, 55, 150);
-    const camera = new THREE.PerspectiveCamera(50, mount.clientWidth / mount.clientHeight, 0.1, 300);
-    camera.position.set(-58, 38, 58);
-    camera.lookAt(0, 0, 0);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
-    mount.appendChild(renderer.domElement);
+  const handleMatchFinish = useCallback((res: MatchResult) => {
+    const cur = profileRef.current;
+    const curUser = userRef.current;
+    const today = getTodayKey();
+    const prevQuests =
+      cur.quests.date === today
+        ? cur.quests
+        : {
+            date: today,
+            kills: 0,
+            surviveSec: 0,
+            builds: 0,
+            claimedKills: false,
+            claimedSurvive: false,
+            claimedBuilds: false
+          };
 
-    scene.add(new THREE.HemisphereLight(0xffe0bd, 0x334455, 2));
-    const sun = new THREE.DirectionalLight(0xffffff, 2.5);
-    sun.position.set(-30, 60, 20);
-    scene.add(sun);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), new THREE.MeshStandardMaterial({ color: map.ground, roughness: 1 }));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.12;
-    scene.add(ground);
-
-    const curve = buildTrack(map.shape);
-    const roadPoints = curve.getSpacedPoints(240);
-    const roadGeometry = new THREE.BufferGeometry();
-    const vertices: number[] = [];
-    const indices: number[] = [];
-    roadPoints.forEach((point, i) => {
-      const next = roadPoints[(i + 1) % roadPoints.length];
-      const tangent = next.clone().sub(point).normalize();
-      const side = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-      vertices.push(point.x + side.x * 9, 0.02, point.z + side.z * 9);
-      vertices.push(point.x - side.x * 9, 0.02, point.z - side.z * 9);
-      if (i < roadPoints.length - 1) {
-        const base = i * 2;
-        indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+    const nextXp = cur.xp + res.xpEarned;
+    const calc = xpForLevel(nextXp);
+    const updated: BrPlayerProfile = {
+      ...cur,
+      xp: nextXp,
+      level: calc.level,
+      battlePassTier: calc.tier,
+      coins: cur.coins + res.coinsEarned,
+      wins: cur.wins + (res.won ? 1 : 0),
+      kills: cur.kills + res.kills,
+      matchesPlayed: cur.matchesPlayed + 1,
+      quests: {
+        ...prevQuests,
+        kills: prevQuests.kills + res.kills,
+        surviveSec: prevQuests.surviveSec + res.survivalSec,
+        builds: prevQuests.builds + res.buildsPlaced
       }
-    });
-    roadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    roadGeometry.setIndex(indices);
-    roadGeometry.computeVertexNormals();
-    scene.add(new THREE.Mesh(roadGeometry, new THREE.MeshStandardMaterial({ color: map.road, roughness: 0.85, side: THREE.DoubleSide })));
-
-    roadPoints.forEach((point, i) => {
-      if (i % 5 !== 0) return;
-      const next = roadPoints[(i + 1) % roadPoints.length];
-      const tangent = next.clone().sub(point).normalize();
-      const side = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-      [-1, 1].forEach((edge, edgeIndex) => {
-        const curb = new THREE.Mesh(
-          new THREE.BoxGeometry(1.7, 0.16, 1.05),
-          new THREE.MeshBasicMaterial({ color: (i / 5 + edgeIndex) % 2 ? map.accent : 0xffffff }),
-        );
-        curb.position.set(point.x + side.x * 9.7 * edge, 0.12, point.z + side.z * 9.7 * edge);
-        curb.rotation.y = Math.atan2(tangent.x, tangent.z);
-        scene.add(curb);
-      });
-    });
-
-    const car = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.7, 4.2), new THREE.MeshStandardMaterial({ color: map.accent, metalness: 0.45, roughness: 0.32 }));
-    body.position.y = 0.7;
-    car.add(body);
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.62, 1.9), new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6, roughness: 0.18 }));
-    cabin.position.set(0, 1.35, -0.15);
-    car.add(cabin);
-    [[-1.15,.45,-1.35],[1.15,.45,-1.35],[-1.15,.45,1.35],[1.15,.45,1.35]].forEach(([x,y,z]) => {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(.48,.48,.32,12), new THREE.MeshStandardMaterial({ color: 0x090909 }));
-      wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(x,y,z);
-      car.add(wheel);
-    });
-    scene.add(car);
-
-    let progress = 0;
-    let raf = 0;
-    const clock = new THREE.Clock();
-    const animate = () => {
-      raf = requestAnimationFrame(animate);
-      const dt = clock.getDelta();
-      if (started) progress += dt * 0.018;
-      const position = curve.getPointAt(progress % 1);
-      const tangent = curve.getTangentAt(progress % 1);
-      car.position.copy(position);
-      car.position.y = 0;
-      car.rotation.y = Math.atan2(tangent.x, tangent.z);
-      if (started) {
-        const desired = position.clone().add(tangent.clone().multiplyScalar(-12)).add(new THREE.Vector3(0,7,0));
-        camera.position.lerp(desired, 1 - Math.pow(0.002, dt));
-        camera.lookAt(position.clone().add(tangent.clone().multiplyScalar(5)).add(new THREE.Vector3(0,1,0)));
-      }
-      renderer.render(scene, camera);
     };
-    animate();
-    const resize = () => {
-      if (!mount.clientWidth || !mount.clientHeight) return;
-      camera.aspect = mount.clientWidth / mount.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(mount.clientWidth, mount.clientHeight);
-    };
-    window.addEventListener('resize', resize);
+    setProfile(updated);
+    void saveBrPlayer(curUser, updated);
+
+    const nowIso = new Date().toISOString();
+    const startIso = new Date(Date.now() - res.survivalSec * 1000).toISOString();
+    void recordBrMatch(curUser, {
+      match_id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      mode: res.mode,
+      players: [cur.username],
+      winner: res.winnerName,
+      started_at: startIso,
+      ended_at: nowIso
+    });
+  }, []);
+
+  // Initialize Three.js Engine once
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const engine = new BattleRoyaleEngine(
+      canvas,
+      (snapshot) => setHud(snapshot),
+      handleMatchFinish
+    );
+    engineRef.current = engine;
     return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener('resize', resize);
-      renderer.dispose();
-      mount.innerHTML = '';
+      engine.dispose();
+      engineRef.current = null;
     };
-  }, [map, started]);
+  }, [handleMatchFinish]);
 
   useEffect(() => {
-    if (!started) return;
-    const timer = window.setInterval(() => setSpeed(value => Math.min(value + 7, 168)), 80);
-    return () => clearInterval(timer);
-  }, [started]);
+    engineRef.current?.setMobileMode(isMobile);
+  }, [isMobile]);
 
-  const startRace = () => {
-    setNotice('');
-    setSpeed(0);
-    raceStartedAt.current = Date.now();
-    setStarted(true);
-  };
+  // Update 3D Lobby Showcase whenever loadout or party changes
+  useEffect(() => {
+    const mates =
+      party?.members
+        .filter((m) => m.playerId !== profile.player_id)
+        .map((m) => m.loadout) || [];
+    engineRef.current?.updateShowcaseLoadout(profile.loadout, profile.username, mates);
+  }, [profile.loadout, profile.username, profile.player_id, party]);
 
-  const finishRace = async () => {
-    setStarted(false);
-    setSaving(true);
-    setNotice('Saving your record…');
-    const elapsed = Math.max(Date.now() - raceStartedAt.current, 1000);
+  // Auth subscription & Cloud Profile load
+  useEffect(() => {
+    const unsub = subscribeAuth((authUser) => {
+      setUser(authUser);
+      void (async () => {
+        const { profile: loaded, inventory: inv } = await loadOrCreateBrPlayer(authUser);
+        setProfile(loaded);
+        setInventory(inv);
+        brOnline.register(loaded.player_id, loaded.username, loaded.level + loaded.wins * 2, loaded.loadout);
+        const fList = await fetchBrFriends(loaded.player_id);
+        setFriends(fList);
+      })();
+    });
+    return unsub;
+  }, []);
+
+  // Initial shop & leaderboard fetch
+  useEffect(() => {
+    void fetchDailyShop().then(setShopItems);
+    void fetchBrLeaderboard().then(setLeaderboard);
+  }, []);
+
+  // Online WebSocket Party & Friend listeners
+  useEffect(() => {
+    const unsub = brOnline.subscribe((type, raw) => {
+      const p = raw as Record<string, unknown>;
+      if (type === 'br:partySync') {
+        setParty(raw as PartyState);
+      } else if (type === 'br:partyChat') {
+        setPartyChat((prev) => [...prev.slice(-24), { sender: String(p.sender || ''), text: String(p.text || '') }]);
+      } else if (type === 'br:partyInviteReceived') {
+        setPendingInvite({
+          partyCode: String(p.partyCode || ''),
+          fromName: String(p.fromName || 'Friend')
+        });
+        setStatusBanner(`${String(p.fromName || 'Friend')} invited you to their Squad Party!`);
+      } else if (type === 'br:friendRequest') {
+        void fetchBrFriends(profileRef.current.player_id).then(setFriends);
+        setStatusBanner(`New friend request from ${String(p.fromName || 'Player')}!`);
+      }
+    });
+    return unsub;
+  }, []);
+
+  const handleGoogleSignIn = async () => {
     try {
-      await saveRecord({ playerName, trackName: map.name, timeMs: elapsed });
-      setNotice(`Record saved online: ${formatTime(elapsed)}`);
-      await refreshRecords();
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not save your record');
-    } finally {
-      setSaving(false);
+      await signInWithGoogle();
+    } catch {
+      setStatusBanner('Google Sign-In popup was cancelled or blocked.');
     }
   };
+
+  const handleSignOut = async () => {
+    await signOutGoogle();
+  };
+
+  const handlePlay = () => {
+    setModal('none');
+    engineRef.current?.startMatch({
+      mode: activeMode,
+      loadout: profile.loadout,
+      username: profile.username,
+      matchesPlayed: profile.matchesPlayed,
+      partyCount: party?.members.length || 1
+    });
+  };
+
+  const handleUpdateLoadout = (nextLoadout: PlayerLoadout) => {
+    const updated: BrPlayerProfile = { ...profile, loadout: nextLoadout };
+    setProfile(updated);
+    void saveBrPlayer(user, updated);
+    brOnline.register(updated.player_id, updated.username, updated.level + updated.wins * 2, nextLoadout);
+  };
+
+  const handleBuyItem = (item: CosmeticItem) => {
+    if (ownedItemIds.has(item.item_id) || profile.coins < item.price) return;
+    const updated: BrPlayerProfile = {
+      ...profile,
+      coins: profile.coins - item.price,
+      loadout:
+        item.type !== 'emote'
+          ? { ...profile.loadout, [item.type]: item.item_id }
+          : profile.loadout
+    };
+    const newEntry: BrInventoryEntry = {
+      player_id: profile.player_id,
+      item_id: item.item_id,
+      item_type: item.type,
+      equipped: item.type !== 'emote'
+    };
+    setProfile(updated);
+    setInventory((prev) => [...prev, newEntry]);
+    void saveBrPlayer(user, updated);
+    void saveBrInventoryItem(user, newEntry);
+    soundEngine.chest();
+    setStatusBanner(`Unlocked & equipped ${item.name}!`);
+  };
+
+  const handleUnlockPremiumPass = () => {
+    if (profile.battlePassPremium || profile.coins < 800) return;
+    const updated: BrPlayerProfile = {
+      ...profile,
+      coins: profile.coins - 800,
+      battlePassPremium: true
+    };
+    setProfile(updated);
+    void saveBrPlayer(user, updated);
+    soundEngine.victory();
+  };
+
+  const handleClaimQuest = (questId: 'kills' | 'survive' | 'builds') => {
+    const def = DAILY_QUESTS.find((q) => q.id === questId);
+    if (!def) return;
+    const q = { ...profile.quests };
+    if (questId === 'kills' && (q.claimedKills || q.kills < def.target)) return;
+    if (questId === 'survive' && (q.claimedSurvive || q.surviveSec < def.target)) return;
+    if (questId === 'builds' && (q.claimedBuilds || q.builds < def.target)) return;
+
+    if (questId === 'kills') q.claimedKills = true;
+    if (questId === 'survive') q.claimedSurvive = true;
+    if (questId === 'builds') q.claimedBuilds = true;
+
+    const nextXp = profile.xp + def.rewardXp;
+    const calc = xpForLevel(nextXp);
+    const updated: BrPlayerProfile = {
+      ...profile,
+      coins: profile.coins + def.rewardCoins,
+      xp: nextXp,
+      level: calc.level,
+      battlePassTier: calc.tier,
+      quests: q
+    };
+    setProfile(updated);
+    void saveBrPlayer(user, updated);
+    soundEngine.chest();
+  };
+
+  const handleToggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    soundEngine.muted = next;
+  };
+
+  const handleAddFriend = async (query: string): Promise<string | null> => {
+    const res = await addBrFriend(profile.player_id, query);
+    if (!res.ok) return res.error || 'Could not add friend.';
+    if (res.friends) setFriends(res.friends);
+    return null;
+  };
+
+  const handleUpdateFriend = async (friendshipId: string, status: 'accepted' | 'blocked' | 'removed') => {
+    const next = await updateBrFriendStatus(friendshipId, profile.player_id, status);
+    setFriends(next);
+  };
+
+  const inMatch = Boolean(hud?.inMatch);
 
   return (
-    <main className="game">
-      <div ref={mountRef} className="canvas" />
-      <section className={`panel ${started ? 'racing' : ''}`}>
-        {!started ? <>
-          <header className="topbar">
-            <div className="brand">APEX <span>RUSH</span></div>
-            <div className="level">MAP SELECT</div>
+    <div className="relative w-full h-full overflow-hidden bg-sky-500">
+      {/* Full-Viewport 3D Canvas */}
+      <canvas ref={canvasRef} className="fixed inset-0 w-full h-full block z-0" />
+
+      {/* Active Match HUD */}
+      {inMatch && hud && (
+        <MatchHud
+          hud={hud}
+          engine={engineRef.current}
+          isMobile={isMobile}
+          muted={muted}
+          onToggleMute={handleToggleMute}
+          onExit={() => engineRef.current?.exitMatch()}
+          onPlayAgain={handlePlay}
+        />
+      )}
+
+      {/* Home Screen / Lobby Overlay */}
+      {!inMatch && (
+        <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 sm:p-6">
+          {/* Top Navigation Bar: PLAY | SHOP | LOCKER | LEADERBOARD + Social & Google Account */}
+          <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 bg-slate-950/90 border border-slate-800 rounded-2xl px-4 py-2.5 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-display font-black text-lg">
+                SR
+              </div>
+              <div>
+                <h1 className="font-display font-black text-lg tracking-tight leading-none text-white">
+                  SKYDROP <span className="text-amber-400">ROYALE</span>
+                </h1>
+                <p className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">
+                  Cartoon Island Battle Royale
+                </p>
+              </div>
+            </div>
+
+            {/* Primary Home Tabs */}
+            <nav className="flex items-center gap-1.5">
+              <button
+                onClick={() => setModal('none')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-display font-bold text-xs uppercase cursor-pointer ${
+                  modal === 'none'
+                    ? 'bg-amber-400 text-slate-950'
+                    : 'bg-slate-900 text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Play className="w-3.5 h-3.5" /> Play
+              </button>
+              <button
+                onClick={() => setModal('shop')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-display font-bold text-xs uppercase cursor-pointer ${
+                  modal === 'shop'
+                    ? 'bg-amber-400 text-slate-950'
+                    : 'bg-slate-900 text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <ShoppingBag className="w-3.5 h-3.5" /> Shop
+              </button>
+              <button
+                onClick={() => setModal('locker')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-display font-bold text-xs uppercase cursor-pointer ${
+                  modal === 'locker'
+                    ? 'bg-sky-400 text-slate-950'
+                    : 'bg-slate-900 text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Palette className="w-3.5 h-3.5" /> Locker
+              </button>
+              <button
+                onClick={() => {
+                  void fetchBrLeaderboard().then(setLeaderboard);
+                  setModal('leaderboard');
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-display font-bold text-xs uppercase cursor-pointer ${
+                  modal === 'leaderboard'
+                    ? 'bg-emerald-400 text-slate-950'
+                    : 'bg-slate-900 text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" /> Leaderboard
+              </button>
+            </nav>
+
+            {/* Right Account, Coins, Friends & Controls Toggle */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsMobile((m) => !m)}
+                className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] font-bold text-slate-300 cursor-pointer"
+                title="Switch Touch / PC Controls"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                {isMobile ? 'Phone Aim' : 'PC Controls'}
+              </button>
+
+              <button
+                onClick={() => setModal('social')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-sky-400 text-xs font-bold text-sky-300 cursor-pointer"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Friends</span>
+              </button>
+
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-amber-400/40 text-xs font-bold text-amber-300 tabular">
+                <Coins className="w-3.5 h-3.5 text-amber-400" />
+                {profile.coins}
+              </div>
+
+              {user ? (
+                <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1">
+                  <span className="text-xs font-bold text-white max-w-[100px] truncate">{profile.username}</span>
+                  <button
+                    onClick={handleSignOut}
+                    className="text-slate-400 hover:text-rose-400 cursor-pointer"
+                    title="Sign out"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleGoogleSignIn}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-slate-950 font-bold text-xs hover:bg-slate-200 cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" /> Google Sign-In
+                </button>
+              )}
+            </div>
           </header>
-          <div className="map-picker">
-            <p className="eyebrow">RACE LOCATION</p>
-            <h1>{map.name}</h1>
-            <p className="subtitle">{map.subtitle}</p>
-            <div className="details"><span><b>{map.distance}</b> DISTANCE</span><span><b>{map.laps}</b> LAPS</span></div>
-            <button className="launch" onClick={startRace}>RACE NOW <span>›</span></button>
-          </div>
-          <div className="map-list">
-            {maps.map((item, index) => <button key={item.name} className={index === selected ? 'active' : ''} onClick={() => setSelected(index)}>
-              <div className="map-number">0{index + 1}</div><div><strong>{item.name}</strong><small>{item.subtitle}</small></div>
-            </button>)}
-          </div>
-          <aside className="records-card">
-            <div className="records-heading"><strong>ONLINE RECORDS</strong><span className={databaseStatus.startsWith('ONLINE') ? 'connection online' : 'connection'}>{databaseStatus}</span></div>
-            <label className="name-label">RACER NAME<input maxLength={20} value={playerName} onChange={event => {
-              const value = event.target.value.replace(/[<>]/g, '').trimStart();
-              setPlayerName(value);
-              localStorage.setItem('apex-player-name', value);
-            }} /></label>
-            {records.length ? <ol className="record-list">{records.slice(0, 5).map((record, index) => <li key={record.id}><span>{index + 1}. {record.playerName}</span><b>{formatTime(record.timeMs)}</b></li>)}</ol> : <p className="no-records">{databaseStatus.startsWith('ONLINE') ? 'No records yet. Be the first!' : databaseStatus}</p>}
-          </aside>
-          {notice && <p className="notice">{notice}</p>}
-        </> : <>
-          <div className="race-top"><div><span>POSITION</span><strong>1 / 6</strong></div><div><span>TRACK</span><strong>{map.name}</strong></div></div>
-          <button className="exit" disabled={saving} onClick={() => setStarted(false)}>EXIT RACE</button>
-          <button className="finish" disabled={saving || !playerName.trim()} onClick={() => void finishRace()}>{saving ? 'SAVING…' : 'FINISH & SAVE RECORD'}</button>
-          <div className="speedometer"><strong>{speed}</strong><span>MPH</span></div>
-        </>}
-      </section>
-    </main>
+
+          {statusBanner && (
+            <div className="pointer-events-auto self-center bg-slate-950/95 border border-amber-400 text-amber-200 text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-3 shadow-lg">
+              <span>{statusBanner}</span>
+              <button onClick={() => setStatusBanner(null)} className="text-slate-400 hover:text-white cursor-pointer">
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Bottom Home Controls: Left Player Progress/Quests + Right Mode Picker & PLAY Button */}
+          {modal === 'none' && (
+            <div className="flex flex-col md:flex-row items-stretch md:items-end justify-between gap-4">
+              {/* Left Card: Account Level, Wins, Battle Pass & Daily Quests */}
+              <div className="pointer-events-auto bg-slate-950/90 border border-slate-800 rounded-2xl p-4 w-full md:w-[340px] space-y-3 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase text-sky-400">
+                      Level {profile.level} · Tier {profile.battlePassTier} Pass
+                    </p>
+                    <h2 className="font-display font-black text-xl text-white">{profile.username}</h2>
+                  </div>
+                  <div className="text-right tabular">
+                    <span className="block text-xs font-bold text-amber-300">{profile.wins} Wins</span>
+                    <span className="block text-[11px] text-slate-400">{profile.kills} Kills</span>
+                  </div>
+                </div>
+
+                {profile.matchesPlayed < 3 && (
+                  <p className="text-[11px] text-emerald-300 bg-emerald-950/60 border border-emerald-800 rounded-lg px-2.5 py-1.5">
+                    Starter Island Boost active ({3 - profile.matchesPlayed} bot-assisted matches left).
+                  </p>
+                )}
+
+                <div className="space-y-1.5 pt-1 border-t border-slate-800">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase">
+                    <span>Daily Quests</span>
+                    <button
+                      onClick={() => setModal('shop')}
+                      className="text-amber-300 hover:underline cursor-pointer"
+                    >
+                      View Pass & Quests
+                    </button>
+                  </div>
+                  {DAILY_QUESTS.map((q) => {
+                    const val =
+                      q.id === 'kills'
+                        ? profile.quests.kills
+                        : q.id === 'survive'
+                        ? profile.quests.surviveSec
+                        : profile.quests.builds;
+                    return (
+                      <div key={q.id} className="flex items-center justify-between text-xs">
+                        <span className="text-slate-200">{q.title}</span>
+                        <span className="tabular text-emerald-400 font-bold">
+                          {Math.min(q.target, val)}/{q.target}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Right Card: Mode Selector (Battle Royale Solo/Duo/Squad, Zero Build, Creative) & PLAY */}
+              <div className="pointer-events-auto bg-slate-950/90 border border-slate-800 rounded-2xl p-4 w-full md:w-[370px] space-y-3 shadow-xl">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Select Mode</p>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    onClick={() => setSelectedFamily('br')}
+                    className={`p-2.5 rounded-xl border text-left cursor-pointer ${
+                      selectedFamily === 'br'
+                        ? 'bg-sky-500/20 border-sky-400 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <Crown className="w-4 h-4 text-amber-400 mb-1" />
+                    <span className="block font-bold text-xs">Battle Royale</span>
+                    <span className="block text-[10px] text-slate-400">Build + 100P</span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedFamily('zerobuild')}
+                    className={`p-2.5 rounded-xl border text-left cursor-pointer ${
+                      selectedFamily === 'zerobuild'
+                        ? 'bg-sky-500/20 border-sky-400 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <Shield className="w-4 h-4 text-sky-400 mb-1" />
+                    <span className="block font-bold text-xs">Zero Build</span>
+                    <span className="block text-[10px] text-slate-400">Pure Combat</span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedFamily('creative')}
+                    className={`p-2.5 rounded-xl border text-left cursor-pointer ${
+                      selectedFamily === 'creative'
+                        ? 'bg-sky-500/20 border-sky-400 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <Wrench className="w-4 h-4 text-emerald-400 mb-1" />
+                    <span className="block font-bold text-xs">Creative</span>
+                    <span className="block text-[10px] text-slate-400">Free Build</span>
+                  </button>
+                </div>
+
+                {selectedFamily === 'br' && (
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['solo', 'duo', 'squad'] as const).map((sub) => (
+                      <button
+                        key={sub}
+                        onClick={() => setBrSubMode(sub)}
+                        className={`py-2 rounded-lg text-xs font-bold uppercase cursor-pointer border ${
+                          brSubMode === sub
+                            ? 'bg-amber-400 text-slate-950 border-amber-300'
+                            : 'bg-slate-900 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        {sub}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <button
+                  onClick={handlePlay}
+                  className="w-full py-3.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-black text-lg uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+                >
+                  <Gamepad2 className="w-5 h-5" />
+                  Play {activeMode === 'zerobuild' ? 'Zero Build' : activeMode === 'creative' ? 'Creative Practice' : `${brSubMode} Match`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modals */}
+      {!inMatch && modal === 'shop' && (
+        <ShopPassPanel
+          profile={profile}
+          shopItems={shopItems}
+          ownedItemIds={ownedItemIds}
+          onBuyItem={handleBuyItem}
+          onUnlockPremiumPass={handleUnlockPremiumPass}
+          onClaimQuest={handleClaimQuest}
+          onClose={() => setModal('none')}
+        />
+      )}
+
+      {!inMatch && modal === 'locker' && (
+        <LockerPanel
+          loadout={profile.loadout}
+          ownedItemIds={ownedItemIds}
+          onUpdateLoadout={handleUpdateLoadout}
+          onPreviewEmote={(emote: EmoteId) => engineRef.current?.previewEmote(emote)}
+          onClose={() => setModal('none')}
+        />
+      )}
+
+      {!inMatch && modal === 'leaderboard' && (
+        <LeaderboardPanel
+          players={leaderboard.players}
+          matches={leaderboard.matches}
+          currentPlayerId={profile.player_id}
+          onRefresh={() => void fetchBrLeaderboard().then(setLeaderboard)}
+          onClose={() => setModal('none')}
+        />
+      )}
+
+      {!inMatch && modal === 'social' && (
+        <SocialPanel
+          playerId={profile.player_id}
+          friends={friends}
+          party={party}
+          partyChat={partyChat}
+          pendingInvite={pendingInvite}
+          onAddFriend={handleAddFriend}
+          onUpdateFriend={handleUpdateFriend}
+          onAcceptPartyInvite={(code) => {
+            brOnline.joinParty(code);
+            setPendingInvite(null);
+          }}
+          onClose={() => setModal('none')}
+        />
+      )}
+    </div>
   );
 }

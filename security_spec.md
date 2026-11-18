@@ -1,32 +1,31 @@
-# Apex Rush Racing — Firestore Security Specification (Phase 0)
+# SkyDrop Royale (Apex Rush Database) — Firestore Security Specification
 
-## 1. Data Invariants
-1. **Owner-Only Profile & PII Isolation (`/users/{userId}`)**:
-   - Only a verified Google-authenticated user (`request.auth.uid == userId && request.auth.token.email_verified == true`) may `get`, `create`, or `update` their own profile document.
-   - `list` queries on `/users` are strictly forbidden (`allow list: if false`) so PII (`email`, `photoURL`) cannot be scraped.
-   - `ownerId` and `createdAt` are immutable after creation; `createdAt` and `updatedAt` must equal `request.time`.
-   - Profile persists all driver state: progression (`coins`, `xp`, `wins`), garage (`selectedCar`, `unlockedCars`, `custom`), track/race preferences (`selectedTrack`, `onlineName`, `weather`, `volume`, `muted`, `touch`, `cameraMode`, `laps`, `difficulty`), and personal `leaderboards` (up to 10 records per track).
-2. **Owner-Only Ghost Replays (`/users/{userId}/ghosts/{trackId}`)**:
-   - Master Gate enforces `exists(/databases/$(database)/documents/users/$(userId))` and `isOwner(userId)` on single-document writes.
-   - `trackId` must be one of `['city', 'desert', 'mountain', 'coastal']`.
-   - `coords` is a strictly bounded list of numbers (`<= 5400`, up to 1800 `[x, z, h]` samples).
-   - `ownerId` and `createdAt` are immutable after creation; timestamps must equal `request.time`.
-3. **Track Leaderboard Integrity (`/trackRecords/{recordId}`)**:
-   - No PII (`email`, `phone`) is permitted on `trackRecords`.
-   - `recordId` must match `^[a-zA-Z0-9_\-]+$` (length `<= 128`).
-   - Only verified authenticated users may read or submit records, and a user may only create/update records where `userId == request.auth.uid`.
-   - `list` queries explicitly validate `resource.data.time > 1`.
+## 1. Existing Collections Preserved (Non-Destructive)
+1. **`/users/{userId}`** & **`/users/{userId}/ghosts/{trackId}`** & **`/trackRecords/{recordId}`**:
+   - Fully preserved so no existing user profiles, ghosts, or track records are deleted or broken.
 
-## 2. Adversarial Test Vectors ("Dirty Dozen")
-1. Unauthenticated `get` / `create` on `/users/uid1` -> `PERMISSION_DENIED`
-2. Unverified email token (`email_verified: false`) writing `/users/uid1` -> `PERMISSION_DENIED`
-3. Cross-user read (`uid2` reading `/users/uid1` or `/users/uid1/ghosts/city`) -> `PERMISSION_DENIED`
-4. Cross-user list query (`list /users` or `uid2` listing `/users/uid1/ghosts`) -> `PERMISSION_DENIED`
-5. Identity spoofing (`uid1` creating `/users/uid1` with `ownerId: "uid2"`) -> `PERMISSION_DENIED`
-6. Shadow field injection (`isAdmin: true` on `/users/uid1`, `/users/uid1/ghosts/city`, or `/trackRecords/rec1`) -> `PERMISSION_DENIED`
-7. Oversized ID / resource exhaustion (`recordId` > 128 chars or invalid `trackId` on `/users/uid1/ghosts/evil`) -> `PERMISSION_DENIED`
-8. Unbounded array (`unlockedCars` length 13, `coords` length 5401, or non-number element in `coords`) -> `PERMISSION_DENIED`
-9. Fake client timestamp (`createdAt != request.time` or `updatedAt != request.time`) -> `PERMISSION_DENIED`
-10. Immutable field mutation (`ownerId` or `createdAt` changed on update) -> `PERMISSION_DENIED`
-11. Invalid lap time (`time: -5` or `time: 0` or `time: "fast"`) -> `PERMISSION_DENIED`
-12. Cross-user leaderboard overwrite (`uid2` updating `trackRecords` owned by `uid1`) -> `PERMISSION_DENIED`
+## 2. Battle Royale Collections
+1. **Players (`/players/{playerId}`)**:
+   - `playerId` must match `^[a-zA-Z0-9_\-]+$` (length `<= 128`).
+   - Verified signed-in users (`isVerifiedSignedIn()`) may read player profiles (containing only public non-PII gamer `username`, `avatar`, `level`, `xp`, `wins`, `kills`, `coins`, `matchesPlayed`, `battlePassTier`, `battlePassPremium`, `loadout`, `quests`) for global leaderboards and friend lookups (`allow list: if isVerifiedSignedIn() && resource.data.level >= 1`). No email/PII stored on `/players`.
+   - Only the owner (`request.auth.uid == playerId`) may `create` or `update` their own player document (`ownerId == request.auth.uid`), with `createdAt == request.time`, `updatedAt == request.time`, immutable `ownerId`/`createdAt`, and strict field/type/range checks.
+2. **Matches (`/matches/{matchId}`)**:
+   - Stores match history (`match_id`, `mode`, `players`, `winner`, `started_at`, `ended_at`, `createdBy`, `createdAt`, `updatedAt`).
+   - Verified signed-in users may `get`/`list` matches (`resource.data.players.size() >= 1`) and `create` match records where `createdBy == request.auth.uid` and `players.size() <= 100`. Immutable once recorded (`update`/`delete` denied).
+3. **Inventory (`/inventory/{entryId}`)**:
+   - Owner-isolated cosmetic & locker inventory (`player_id`, `item_id`, `item_type`, `equipped`, `createdAt`, `updatedAt`).
+   - Only `player_id == request.auth.uid` may read, create, update (`equipped` toggle), or delete.
+4. **Shop Items (`/shop_items/{itemId}`)**:
+   - Catalog of daily shop cosmetics (`item_id`, `name`, `price`, `rarity`, `type`).
+   - Verified signed-in users may read (`allow list: if isVerifiedSignedIn() && resource.data.price >= 0`), client writes denied (`false`) to prevent price tampering.
+5. **Friends (`/friends/{friendshipId}`)**:
+   - Social links (`player_id`, `friend_id`, `friend_name`, `status`, `createdAt`, `updatedAt`).
+   - Only participants (`request.auth.uid == resource.data.player_id || request.auth.uid == resource.data.friend_id`) can read, update `status`, or delete; only `player_id == request.auth.uid` can create.
+
+## 3. Adversarial Test Vectors
+1. Unauthenticated read/write on `/players/{uid}`, `/inventory/{id}`, `/friends/{id}`, `/matches/{id}` -> `PERMISSION_DENIED`.
+2. Cross-user update on `/players/{otherUid}` or `/inventory/{otherItem}` -> `PERMISSION_DENIED`.
+3. Client price tampering (`create`/`update` on `/shop_items/{id}`) -> `PERMISSION_DENIED`.
+4. Shadow field injection (`isAdmin: true`) on `/players`, `/matches`, `/inventory`, `/friends` -> `PERMISSION_DENIED`.
+5. Unbounded array (`players` > 100 on `/matches`) or invalid mode/rarity/status enum -> `PERMISSION_DENIED`.
+6. Timestamp spoofing (`createdAt != request.time`) or immutable `ownerId`/`player_id` mutation -> `PERMISSION_DENIED`.

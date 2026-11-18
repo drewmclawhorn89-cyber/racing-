@@ -23,6 +23,18 @@ import {
   type Timestamp
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+import {
+  DEFAULT_LOADOUT,
+  getDailyShopItems,
+  getStarterOwnedIds,
+  getTodayKey,
+  xpForLevel,
+  type CosmeticType,
+  type DailyQuestState,
+  type GameMode,
+  type PlayerLoadout,
+  type Rarity
+} from './game/catalog';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -91,6 +103,7 @@ async function testConnection(): Promise<void> {
 }
 void testConnection();
 
+// ===== Preserved Racing Types & Functions =====
 export type CloudSaveData = {
   ownerId: string;
   displayName: string;
@@ -256,7 +269,6 @@ export async function submitGlobalTrackRecord(
     handleFirestoreError(error, OperationType.GET, path);
   }
 
-  // Only overwrite if faster than previous personal best on this circuit
   if (time >= existingTime) return;
 
   const driverName = (entry.driverName || user.displayName || 'Driver').trim().slice(0, 24) || 'Driver';
@@ -310,4 +322,324 @@ export async function fetchGlobalTrackRecords(trackId: string): Promise<GlobalTr
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
   }
+}
+
+// ===== Battle Royale Cloud Tables (players, matches, inventory, shop_items, friends) =====
+
+export interface BrPlayerProfile {
+  player_id: string;
+  username: string;
+  avatar: string;
+  level: number;
+  xp: number;
+  wins: number;
+  kills: number;
+  coins: number;
+  matchesPlayed: number;
+  battlePassTier: number;
+  battlePassPremium: boolean;
+  loadout: PlayerLoadout;
+  quests: DailyQuestState;
+}
+
+export interface BrInventoryEntry {
+  player_id: string;
+  item_id: string;
+  item_type: CosmeticType;
+  equipped: boolean;
+}
+
+export interface BrMatchRecord {
+  match_id: string;
+  mode: GameMode;
+  players: string[];
+  winner: string;
+  started_at: string;
+  ended_at: string;
+}
+
+export interface BrShopItemRecord {
+  item_id: string;
+  name: string;
+  price: number;
+  rarity: Rarity;
+  type: CosmeticType;
+}
+
+export interface BrFriendRecord {
+  friendship_id: string;
+  player_id: string;
+  friend_id: string;
+  friend_name: string;
+  status: 'pending' | 'accepted' | 'blocked';
+}
+
+export function createDefaultBrPlayer(uid: string, name = 'SkyRunner', avatar = ''): BrPlayerProfile {
+  return {
+    player_id: uid,
+    username: name.slice(0, 24) || 'SkyRunner',
+    avatar: avatar.slice(0, 400),
+    level: 1,
+    xp: 0,
+    wins: 0,
+    kills: 0,
+    coins: 500,
+    matchesPlayed: 0,
+    battlePassTier: 1,
+    battlePassPremium: false,
+    loadout: { ...DEFAULT_LOADOUT },
+    quests: {
+      date: getTodayKey(),
+      kills: 0,
+      surviveSec: 0,
+      builds: 0,
+      claimedKills: false,
+      claimedSurvive: false,
+      claimedBuilds: false
+    }
+  };
+}
+
+async function brApi<T>(url: string, options?: RequestInit): Promise<T | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function mirrorProfileToFirestore(user: User, profile: BrPlayerProfile): void {
+  if (!user.emailVerified) return;
+  const docRef = doc(db, 'players', user.uid);
+  void getDoc(docRef)
+    .then((snap) => {
+      const existingCreatedAt = snap.exists() ? (snap.data() as { createdAt?: Timestamp }).createdAt : null;
+      return setDoc(docRef, {
+        ownerId: user.uid,
+        username: profile.username,
+        avatar: profile.avatar,
+        level: profile.level,
+        xp: profile.xp,
+        wins: profile.wins,
+        kills: profile.kills,
+        coins: profile.coins,
+        matchesPlayed: profile.matchesPlayed,
+        battlePassTier: profile.battlePassTier,
+        battlePassPremium: profile.battlePassPremium,
+        loadout: profile.loadout,
+        quests: profile.quests,
+        createdAt: existingCreatedAt || serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    })
+    .catch(() => {
+      // Cloud API remains authoritative if Firestore rules require owner deployment
+    });
+}
+
+export async function loadOrCreateBrPlayer(user: User | null): Promise<{
+  profile: BrPlayerProfile;
+  inventory: BrInventoryEntry[];
+}> {
+  const uid = user?.uid || 'guest_local';
+  const defaultName = (user?.displayName || 'SkyRunner').trim().slice(0, 24) || 'SkyRunner';
+  const defaultAvatar = user?.photoURL || '';
+
+  // Try Firestore first if signed in
+  if (user?.emailVerified) {
+    try {
+      const snap = await getDoc(doc(db, 'players', user.uid));
+      if (snap.exists()) {
+        const d = snap.data() as Record<string, unknown>;
+        const xp = Number(d.xp || 0);
+        const calc = xpForLevel(xp);
+        const loaded: BrPlayerProfile = {
+          player_id: user.uid,
+          username: String(d.username || defaultName),
+          avatar: String(d.avatar || defaultAvatar),
+          level: Math.max(calc.level, Number(d.level || 1)),
+          xp,
+          wins: Number(d.wins || 0),
+          kills: Number(d.kills || 0),
+          coins: Number(d.coins ?? 500),
+          matchesPlayed: Number(d.matchesPlayed || 0),
+          battlePassTier: Math.max(calc.tier, Number(d.battlePassTier || 1)),
+          battlePassPremium: Boolean(d.battlePassPremium),
+          loadout: { ...DEFAULT_LOADOUT, ...((d.loadout as Partial<PlayerLoadout>) || {}) },
+          quests: normalizeQuests(d.quests as Partial<DailyQuestState> | undefined)
+        };
+        const apiRes = await brApi<{ profile: BrPlayerProfile; inventory: BrInventoryEntry[] }>(
+          `/api/br/player/${encodeURIComponent(uid)}?username=${encodeURIComponent(loaded.username)}&avatar=${encodeURIComponent(loaded.avatar)}`
+        );
+        return {
+          profile: loaded,
+          inventory: apiRes?.inventory || buildStarterInventory(uid, loaded.loadout)
+        };
+      }
+    } catch {
+      // Fallback to server cloud API
+    }
+  }
+
+  const apiRes = await brApi<{ profile: BrPlayerProfile; inventory: BrInventoryEntry[] }>(
+    `/api/br/player/${encodeURIComponent(uid)}?username=${encodeURIComponent(defaultName)}&avatar=${encodeURIComponent(defaultAvatar)}`
+  );
+  if (apiRes?.profile) {
+    apiRes.profile.quests = normalizeQuests(apiRes.profile.quests);
+    return apiRes;
+  }
+
+  const fallback = createDefaultBrPlayer(uid, defaultName, defaultAvatar);
+  return {
+    profile: fallback,
+    inventory: buildStarterInventory(uid, fallback.loadout)
+  };
+}
+
+function normalizeQuests(raw?: Partial<DailyQuestState>): DailyQuestState {
+  const today = getTodayKey();
+  if (!raw || raw.date !== today) {
+    return {
+      date: today,
+      kills: 0,
+      surviveSec: 0,
+      builds: 0,
+      claimedKills: false,
+      claimedSurvive: false,
+      claimedBuilds: false
+    };
+  }
+  return {
+    date: today,
+    kills: Number(raw.kills || 0),
+    surviveSec: Number(raw.surviveSec || 0),
+    builds: Number(raw.builds || 0),
+    claimedKills: Boolean(raw.claimedKills),
+    claimedSurvive: Boolean(raw.claimedSurvive),
+    claimedBuilds: Boolean(raw.claimedBuilds)
+  };
+}
+
+function buildStarterInventory(uid: string, loadout: PlayerLoadout): BrInventoryEntry[] {
+  const equippedIds = new Set(Object.values(loadout));
+  return getStarterOwnedIds().map((id) => ({
+    player_id: uid,
+    item_id: id,
+    item_type: id.startsWith('skin_')
+      ? 'skin'
+      : id.startsWith('hair_')
+      ? 'hair'
+      : id.startsWith('pack_')
+      ? 'backpack'
+      : id.startsWith('pick_')
+      ? 'pickaxe'
+      : id.startsWith('glider_')
+      ? 'glider'
+      : 'emote',
+    equipped: equippedIds.has(id)
+  }));
+}
+
+export async function saveBrPlayer(user: User | null, profile: BrPlayerProfile): Promise<void> {
+  if (user) {
+    mirrorProfileToFirestore(user, profile);
+  }
+  await brApi(`/api/br/player/${encodeURIComponent(profile.player_id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(profile)
+  });
+}
+
+export async function saveBrInventoryItem(
+  user: User | null,
+  entry: BrInventoryEntry
+): Promise<void> {
+  if (user?.emailVerified) {
+    const entryId = `${user.uid}_${entry.item_id}`;
+    void getDoc(doc(db, 'inventory', entryId))
+      .then((snap) => {
+        const createdAt = snap.exists() ? (snap.data() as { createdAt?: Timestamp }).createdAt : null;
+        return setDoc(doc(db, 'inventory', entryId), {
+          player_id: user.uid,
+          item_id: entry.item_id,
+          item_type: entry.item_type,
+          equipped: entry.equipped,
+          createdAt: createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      })
+      .catch(() => {});
+  }
+  await brApi('/api/br/inventory', {
+    method: 'POST',
+    body: JSON.stringify(entry)
+  });
+}
+
+export async function recordBrMatch(user: User | null, match: BrMatchRecord): Promise<void> {
+  if (user?.emailVerified) {
+    void setDoc(doc(db, 'matches', match.match_id), {
+      ...match,
+      createdBy: user.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }).catch(() => {});
+  }
+  await brApi('/api/br/matches', {
+    method: 'POST',
+    body: JSON.stringify(match)
+  });
+}
+
+export async function fetchBrLeaderboard(): Promise<{
+  players: BrPlayerProfile[];
+  matches: BrMatchRecord[];
+}> {
+  const res = await brApi<{ players: BrPlayerProfile[]; matches: BrMatchRecord[] }>('/api/br/leaderboard');
+  return res || { players: [], matches: [] };
+}
+
+export async function fetchDailyShop(): Promise<BrShopItemRecord[]> {
+  const res = await brApi<{ items: BrShopItemRecord[] }>('/api/br/shop');
+  if (res?.items?.length) return res.items;
+  return getDailyShopItems().map((c) => ({
+    item_id: c.item_id,
+    name: c.name,
+    price: c.price,
+    rarity: c.rarity,
+    type: c.type
+  }));
+}
+
+export async function fetchBrFriends(playerId: string): Promise<BrFriendRecord[]> {
+  const res = await brApi<{ friends: BrFriendRecord[] }>(`/api/br/friends/${encodeURIComponent(playerId)}`);
+  return res?.friends || [];
+}
+
+export async function addBrFriend(
+  playerId: string,
+  friendQuery: string
+): Promise<{ ok: boolean; error?: string; friends?: BrFriendRecord[] }> {
+  const res = await brApi<{ ok: boolean; error?: string; friends?: BrFriendRecord[] }>('/api/br/friends', {
+    method: 'POST',
+    body: JSON.stringify({ player_id: playerId, friend_query: friendQuery })
+  });
+  return res || { ok: false, error: 'Network error' };
+}
+
+export async function updateBrFriendStatus(
+  friendshipId: string,
+  playerId: string,
+  status: 'accepted' | 'blocked' | 'removed'
+): Promise<BrFriendRecord[]> {
+  const res = await brApi<{ friends: BrFriendRecord[] }>(`/api/br/friends/${encodeURIComponent(friendshipId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ player_id: playerId, status })
+  });
+  return res?.friends || [];
 }
