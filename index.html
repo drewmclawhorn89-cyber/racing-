@@ -387,6 +387,29 @@
       text-align: center;
     }
 
+    .online-form { display: flex; flex-direction: column; gap: 10px; }
+    .online-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem; color: var(--text-muted); }
+    .online-field input {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: inherit;
+      font: inherit;
+      font-size: 0.95rem;
+    }
+    .online-field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .online-room-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .online-room-code { font-size: 1.6rem; font-weight: 800; letter-spacing: 0.18em; color: var(--accent); }
+    .online-players { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .online-players li {
+      display: flex; justify-content: space-between; gap: 8px;
+      padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.88rem;
+    }
+    .online-players .tag { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .online-status { font-size: 0.82rem; color: var(--text-muted); min-height: 1em; }
+    .online-status.error { color: #f87171; }
+
     .seg-btn.active {
       background: var(--accent);
       color: #09090b;
@@ -1178,7 +1201,37 @@
               <button class="seg-btn active" data-mode="race">Grid Race (8 Cars)</button>
               <button class="seg-btn" data-mode="timetrial">Time Trial (Ghost)</button>
               <button class="seg-btn" data-mode="freeroam">Free Roam</button>
+              <button class="seg-btn" data-mode="online">Online Race</button>
             </div>
+          </div>
+
+          <div class="section-block" id="setup-online" style="display:none;">
+            <div class="section-label">Online Lobby</div>
+            <div id="online-join-form" class="online-form">
+              <label class="online-field">
+                <span>Driver Name</span>
+                <input id="online-name" type="text" maxlength="16" autocomplete="nickname" placeholder="Your name">
+              </label>
+              <label class="online-field">
+                <span>Room Code</span>
+                <input id="online-code" type="text" maxlength="6" autocomplete="off" placeholder="e.g. K7Q2M" style="text-transform:uppercase;">
+              </label>
+              <div class="seg-row">
+                <button id="btn-online-create" class="seg-btn">Create Room</button>
+                <button id="btn-online-join" class="seg-btn">Join Room</button>
+              </div>
+            </div>
+            <div id="online-lobby" style="display:none; flex-direction:column; gap:10px;">
+              <div class="online-room-row">
+                <div>
+                  <div style="font-size:0.78rem; color:var(--text-muted);">Room Code · share with friends</div>
+                  <div id="online-room-code" class="online-room-code tabular">-----</div>
+                </div>
+                <button id="btn-online-leave" class="btn-back">Leave</button>
+              </div>
+              <ul id="online-players" class="online-players" aria-label="Players in room"></ul>
+            </div>
+            <div id="online-status" class="online-status" role="status" aria-live="polite"></div>
           </div>
 
           <div class="section-block">
@@ -1520,6 +1573,7 @@
   <script type="module">
     import * as THREE from 'three';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { OnlineRoom, generateRoomCode, normalizeRoomCode, isOnlineConfigured } from '/src/online.ts';
 
     // =========================================================================
     // 1. DATA DEFINITIONS & PERSISTENT SAVE STATE
@@ -3025,7 +3079,15 @@
       dragging: false,
       lastPtrX: 0,
       lastPtrY: 0,
-      pitCooldown: 0
+      pitCooldown: 0,
+      online: {
+        room: null,
+        remotes: new Map(),
+        finishTimes: new Map(),
+        sendTimer: 0,
+        status: '',
+        statusError: false
+      }
     };
 
     const keys = {
@@ -3131,6 +3193,11 @@
       });
       game.cars = [];
       game.player = null;
+      game.online.remotes.forEach(r => {
+        scene.remove(r.built.group);
+        disposeGroup(r.built.group);
+      });
+      game.online.remotes.clear();
       if (game.ghostMesh) {
         scene.remove(game.ghostMesh.group);
         disposeGroup(game.ghostMesh.group);
@@ -3159,12 +3226,17 @@
       game.showcaseCar = built;
     }
 
-    function startRaceSession() {
+    function startRaceSession(onlineStart = null) {
+      if (game.mode === 'online' && !onlineStart) {
+        showScreen('setup');
+        return;
+      }
       audio.init();
       clearShowcaseCar();
       clearRaceActors();
 
-      const trackDef = TRACKS.find(t => t.id === saveData.selectedTrack) || TRACKS[0];
+      const trackId = onlineStart ? onlineStart.trackId : saveData.selectedTrack;
+      const trackDef = TRACKS.find(t => t.id === trackId) || TRACKS[0];
       buildTrackWorld(trackDef, saveData.settings.weather);
       applyWeatherLighting(saveData.settings.weather);
       scene.add(smokeInst);
@@ -3172,7 +3244,36 @@
       const playerCarDef = CARS.find(c => c.id === saveData.selectedCar) || CARS[0];
       const playerCustom = saveData.custom[playerCarDef.id];
 
-      if (game.mode === 'race') {
+      if (onlineStart) {
+        const room = game.online.room;
+        game.laps = onlineStart.laps;
+        game.online.finishTimes.clear();
+        game.online.sendTimer = 0;
+        const grid = onlineStart.grid.slice(0, 8);
+        grid.forEach((pid, gridIdx) => {
+          if (pid === room.selfId) {
+            const player = createCarActor(playerCarDef, playerCustom, true, 'YOU', gridIdx);
+            game.cars.push(player);
+            game.player = player;
+            return;
+          }
+          const info = room.players.find(p => p.id === pid);
+          if (!info) return;
+          const def = CARS.find(c => c.id === info.carId) || CARS[0];
+          const custom = { color: info.color || def.defaultColor, wheels: info.wheels || '5spoke', spoiler: info.spoiler || 'street' };
+          const remote = createCarActor(def, custom, false, info.name, gridIdx);
+          remote.isRemote = true;
+          remote.targetX = remote.x;
+          remote.targetZ = remote.z;
+          remote.targetH = remote.heading;
+          game.online.remotes.set(pid, remote);
+        });
+        if (!game.player) {
+          const player = createCarActor(playerCarDef, playerCustom, true, 'YOU', grid.length);
+          game.cars.push(player);
+          game.player = player;
+        }
+      } else if (game.mode === 'race') {
         // 7 AI opponents + Player starting P8
         const pool = CARS.filter(c => c.id !== playerCarDef.id);
         for (let i = 0; i < 7; i++) {
@@ -3222,7 +3323,9 @@
         game.raceActive = true;
         document.getElementById('countdown-banner').style.display = 'none';
       } else {
-        game.countdown = 3.2;
+        game.countdown = onlineStart
+          ? THREE.MathUtils.clamp((onlineStart.startAt - Date.now()) / 1000, 0.05, 6)
+          : 3.2;
         game.countdownStep = 4;
         game.raceActive = false;
       }
@@ -3272,11 +3375,14 @@
           }
         }
 
-        if (game.mode === 'race') {
+        if (game.mode === 'race' || game.mode === 'online') {
           if (car.lap >= game.laps && !car.finished) {
             car.finished = true;
             car.finishTime = game.totalTime;
-            if (car.isPlayer) {
+            if (car.isPlayer && game.mode === 'online') {
+              game.online.room?.sendFinish(game.totalTime);
+              finishOnlineRace();
+            } else if (car.isPlayer) {
               finishRace();
             }
           } else {
@@ -3305,7 +3411,8 @@
     }
 
     function getStandings() {
-      return [...game.cars].sort((a, b) => {
+      const field = game.mode === 'online' ? [...game.cars, ...game.online.remotes.values()] : [...game.cars];
+      return field.sort((a, b) => {
         if (a.finished && b.finished) return a.finishTime - b.finishTime;
         if (a.finished) return -1;
         if (b.finished) return 1;
@@ -3370,6 +3477,91 @@
       });
 
       showScreen('results');
+    }
+
+    function renderOnlineResultsTable() {
+      const standings = getStandings();
+      const playerRank = standings.findIndex(c => c.isPlayer) + 1;
+      document.getElementById('res-title').textContent =
+        playerRank === 1 ? 'Online Victory' : `${ordinal(playerRank)} Place Online`;
+      document.getElementById('res-pos').textContent = `${ordinal(playerRank)} / ${standings.length}`;
+      const tbody = document.getElementById('res-tbody');
+      tbody.innerHTML = '';
+      standings.forEach((c, i) => {
+        const tr = document.createElement('tr');
+        if (c.isPlayer) tr.style.background = 'rgba(245, 158, 11, 0.14)';
+        const tdPos = document.createElement('td');
+        tdPos.className = 'tabular';
+        tdPos.style.fontWeight = '700';
+        tdPos.textContent = ordinal(i + 1);
+        const tdName = document.createElement('td');
+        tdName.style.fontWeight = c.isPlayer ? '800' : '500';
+        tdName.textContent = c.name;
+        const tdCar = document.createElement('td');
+        tdCar.textContent = c.carDef.name;
+        const tdGap = document.createElement('td');
+        tdGap.className = 'tabular';
+        tdGap.textContent = c.finished ? formatTime(c.finishTime) : 'Racing...';
+        tr.append(tdPos, tdName, tdCar, tdGap);
+        tbody.appendChild(tr);
+      });
+      return playerRank;
+    }
+
+    function finishOnlineRace() {
+      game.raceActive = false;
+      audio.updateDrive(false, 0, 0, 0, false);
+      const playerRank = renderOnlineResultsTable();
+      const fieldSize = game.online.remotes.size + 1;
+      const coins = fieldSize > 1 ? (playerRank === 1 ? 1200 : playerRank === 2 ? 800 : 400) : 250;
+      const xp = Math.max(150, 700 - (playerRank - 1) * 80);
+      saveData.coins += coins;
+      saveData.xp += xp;
+      let newUnlocks = [];
+      if (playerRank === 1 && fieldSize > 1) {
+        saveData.wins += 1;
+        newUnlocks = syncWinUnlocks();
+        audio.playVictoryCheer();
+      } else {
+        audio.playBeep(660, 0.25);
+      }
+      persistSave();
+      document.getElementById('res-total').textContent = formatTime(game.totalTime);
+      document.getElementById('res-best').textContent = formatTime(game.bestSessionLap);
+      document.getElementById('res-rewards').textContent = `+${coins} Cr · +${xp} XP`;
+      const unlockEl = document.getElementById('res-unlock-msg');
+      unlockEl.style.display = newUnlocks.length > 0 ? 'block' : 'none';
+      if (newUnlocks.length > 0) unlockEl.textContent = `New Car Unlocked: ${newUnlocks.join(', ')}`;
+      showScreen('results');
+    }
+
+    function updateOnlineRace(dt) {
+      const room = game.online.room;
+      const p = game.player;
+      if (!room || !p) return;
+      game.online.sendTimer += dt;
+      if (game.online.sendTimer >= 1 / 15) {
+        game.online.sendTimer = 0;
+        room.sendState({
+          x: Number(p.x.toFixed(2)), z: Number(p.z.toFixed(2)), h: Number(p.heading.toFixed(3)),
+          v: Number(p.speed.toFixed(1)), lap: p.lap, s: Number(p.s.toFixed(4)),
+          n: p.nitroActive, d: p.drifting
+        });
+      }
+      game.online.remotes.forEach(r => {
+        const k = 1 - Math.exp(-14 * dt);
+        r.x += (r.targetX - r.x) * k;
+        r.z += (r.targetZ - r.z) * k;
+        let dh = r.targetH - r.heading;
+        dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+        r.heading += dh * k;
+        r.built.group.position.set(r.x, 0, r.z);
+        r.built.group.rotation.y = r.heading;
+        r.wheelSpin += (r.speed / r.built.wheelRadius) * dt;
+        r.built.wheels.forEach(w => { w.spinGroup.rotation.x = r.wheelSpin; });
+        r.built.flameL.visible = r.nitroActive;
+        r.built.flameR.visible = r.nitroActive;
+      });
     }
 
     function stepCarPhysics(car, dt) {
@@ -3696,6 +3888,13 @@
         ctx.arc(cx, cz, c.isPlayer ? 4.8 : 3.2, 0, Math.PI * 2);
         ctx.fill();
       });
+      game.online.remotes.forEach(r => {
+        const [rx, rz] = toMM(r.x, r.z);
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(rx, rz, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
     }
 
     function updateHudTelemetry() {
@@ -3728,10 +3927,10 @@
       document.getElementById('hud-lap-time').textContent = formatTime(game.totalTime - game.lapStartTime);
       document.getElementById('hud-best-lap').textContent = formatTime(game.bestSessionLap);
 
-      if (game.mode === 'race') {
+      if (game.mode === 'race' || game.mode === 'online') {
         const standings = getStandings();
         const rank = standings.findIndex(c => c.isPlayer) + 1;
-        document.getElementById('hud-pos').textContent = `${ordinal(rank)} / 8`;
+        document.getElementById('hud-pos').textContent = `${ordinal(rank)} / ${standings.length}`;
         document.getElementById('hud-lap').textContent = `${Math.min(p.lap, game.laps)} / ${game.laps}`;
       } else if (game.mode === 'timetrial') {
         document.getElementById('hud-lap').textContent = `LAP ${p.lap}`;
@@ -3921,7 +4120,11 @@
       document.querySelectorAll('#setup-modes button').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === game.mode);
       });
-      document.getElementById('setup-race-options').style.display = game.mode === 'race' ? 'flex' : 'none';
+      const isOnline = game.mode === 'online';
+      document.getElementById('setup-race-options').style.display = (game.mode === 'race' || isOnline) ? 'flex' : 'none';
+      document.getElementById('setup-diff').style.display = isOnline ? 'none' : 'flex';
+      document.getElementById('setup-online').style.display = isOnline ? 'flex' : 'none';
+      renderOnlineLobby();
 
       document.querySelectorAll('#setup-laps button').forEach(btn => {
         btn.classList.toggle('active', Number(btn.dataset.laps) === game.laps);
@@ -3972,8 +4175,128 @@
       renderStatBars(document.getElementById('setup-car-stats'), selCar.stats);
 
       const trObj = TRACKS.find(t => t.id === saveData.selectedTrack);
-      const modeStr = game.mode === 'race' ? `${game.laps} Laps · ${game.difficulty}` : game.mode === 'timetrial' ? 'Time Trial' : 'Free Roam';
+      const modeStr = game.mode === 'race' ? `${game.laps} Laps · ${game.difficulty}`
+        : game.mode === 'online' ? `${game.laps} Laps · Online`
+        : game.mode === 'timetrial' ? 'Time Trial' : 'Free Roam';
       document.getElementById('setup-summary-text').textContent = `${trObj.name} · ${selCar.name} · ${modeStr}`;
+    }
+
+    function onlineProfile() {
+      const carDef = CARS.find(c => c.id === saveData.selectedCar) || CARS[0];
+      const custom = saveData.custom[carDef.id] || {};
+      const name = (document.getElementById('online-name').value.trim() || saveData.onlineName || 'Driver').slice(0, 16);
+      return {
+        name,
+        carId: carDef.id,
+        color: custom.color || carDef.defaultColor,
+        wheels: custom.wheels || '5spoke',
+        spoiler: custom.spoiler || 'street'
+      };
+    }
+
+    function setOnlineStatus(text, isError = false) {
+      game.online.status = text;
+      game.online.statusError = isError;
+      const el = document.getElementById('online-status');
+      el.textContent = text;
+      el.classList.toggle('error', isError);
+    }
+
+    function renderOnlineLobby() {
+      const room = game.online.room;
+      const startBtn = document.getElementById('btn-start-race');
+      document.getElementById('online-join-form').style.display = room ? 'none' : 'flex';
+      document.getElementById('online-lobby').style.display = room ? 'flex' : 'none';
+      setOnlineStatus(game.online.status, game.online.statusError);
+
+      if (game.mode !== 'online') {
+        startBtn.disabled = false;
+        startBtn.textContent = 'Start Race';
+        return;
+      }
+      if (!room) {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Join a Room';
+        return;
+      }
+      if (game.online.connected && !game.online.statusError) {
+        setOnlineStatus(room.isHost
+          ? 'Connected. You are the host - start when everyone is in.'
+          : 'Connected. Waiting for the host to start.');
+      }
+      document.getElementById('online-room-code').textContent = room.code;
+      const list = document.getElementById('online-players');
+      list.innerHTML = '';
+      room.players.forEach((pl, i) => {
+        const li = document.createElement('li');
+        const name = document.createElement('span');
+        name.textContent = pl.id === room.selfId ? `${pl.name} (You)` : pl.name;
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        const car = CARS.find(c => c.id === pl.carId);
+        tag.textContent = `${i === 0 ? 'Host · ' : ''}${car ? car.name : 'Car'}`;
+        li.append(name, tag);
+        list.appendChild(li);
+      });
+      startBtn.disabled = !room.isHost;
+      startBtn.textContent = room.isHost ? `Start Online Race (${room.players.length})` : 'Waiting for Host';
+    }
+
+    function connectOnlineRoom(code) {
+      if (!isOnlineConfigured()) {
+        setOnlineStatus('Online mode needs Supabase configured for this project.', true);
+        return;
+      }
+      const clean = normalizeRoomCode(code);
+      if (clean.length < 4) {
+        setOnlineStatus('Enter a room code with at least 4 letters or numbers.', true);
+        return;
+      }
+      const profile = onlineProfile();
+      saveData.onlineName = profile.name;
+      persistSave();
+      try {
+        const room = new OnlineRoom(clean, profile, {
+          onPlayers: () => { if (game.screen === 'setup') renderOnlineLobby(); },
+          onStatus: (status, message) => {
+            if (status === 'connecting') setOnlineStatus('Connecting...');
+            else if (status === 'connected') { game.online.connected = true; setOnlineStatus('Connected.'); }
+            else if (status === 'error') setOnlineStatus(message || 'Connection failed.', true);
+            if (game.screen === 'setup') renderOnlineLobby();
+          },
+          onState: (st) => {
+            const r = game.online.remotes.get(st.id);
+            if (!r) return;
+            r.targetX = st.x; r.targetZ = st.z; r.targetH = st.h;
+            r.speed = st.v; r.lap = st.lap; r.s = st.s;
+            r.nitroActive = st.n; r.drifting = st.d;
+          },
+          onStart: (payload) => {
+            if (game.mode !== 'online') game.mode = 'online';
+            startRaceSession(payload);
+          },
+          onFinish: ({ id, time }) => {
+            game.online.finishTimes.set(id, time);
+            const r = game.online.remotes.get(id);
+            if (r) { r.finished = true; r.finishTime = time; }
+            if (game.screen === 'results' && game.mode === 'online') renderOnlineResultsTable();
+          }
+        });
+        game.online.room = room;
+        room.join();
+      } catch (err) {
+        setOnlineStatus(err.message || 'Could not start online mode.', true);
+      }
+      renderOnlineLobby();
+    }
+
+    async function leaveOnlineRoom() {
+      const room = game.online.room;
+      game.online.room = null;
+      game.online.connected = false;
+      setOnlineStatus('');
+      renderOnlineLobby();
+      if (room) await room.leave();
     }
 
     function renderGarage() {
@@ -4156,7 +4479,35 @@
     document.querySelectorAll('#setup-diff button').forEach(b => {
       b.onclick = () => { game.difficulty = b.dataset.diff; renderSetup(); };
     });
-    document.getElementById('btn-start-race').onclick = startRaceSession;
+    document.getElementById('btn-start-race').onclick = () => {
+      if (game.mode !== 'online') { startRaceSession(); return; }
+      const room = game.online.room;
+      if (!room || !room.isHost) return;
+      room.sendStart({
+        trackId: saveData.selectedTrack,
+        laps: game.laps,
+        startAt: Date.now() + 4000,
+        grid: room.players.map(p => p.id)
+      });
+    };
+
+    document.getElementById('online-name').value = saveData.onlineName || '';
+    document.getElementById('online-code').value = '';
+    document.getElementById('btn-online-create').onclick = () => {
+      const code = generateRoomCode();
+      document.getElementById('online-code').value = code;
+      connectOnlineRoom(code);
+    };
+    document.getElementById('btn-online-join').onclick = () => {
+      connectOnlineRoom(document.getElementById('online-code').value);
+    };
+    document.getElementById('online-code').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+        connectOnlineRoom(e.target.value);
+      }
+    });
+    document.getElementById('btn-online-leave').onclick = leaveOnlineRoom;
+    window.addEventListener('beforeunload', () => { game.online.room?.leave(); });
 
     document.querySelectorAll('#set-weather button').forEach(b => {
       b.onclick = () => {
@@ -4224,13 +4575,13 @@
     };
 
     document.getElementById('btn-pause-resume').onclick = () => showScreen('race');
-    document.getElementById('btn-pause-restart').onclick = startRaceSession;
+    document.getElementById('btn-pause-restart').onclick = () => startRaceSession();
     document.getElementById('btn-pause-photo').onclick = enterPhotoMode;
     document.getElementById('btn-pause-settings').onclick = () => { prevSettingsReturn = 'pause'; showScreen('settings'); };
     document.getElementById('btn-pause-quit').onclick = () => showScreen('menu');
 
     document.getElementById('btn-res-menu').onclick = () => showScreen('menu');
-    document.getElementById('btn-res-again').onclick = startRaceSession;
+    document.getElementById('btn-res-again').onclick = () => startRaceSession();
 
     function enterPhotoMode() {
       audio.updateDrive(false, 0, 0, 0, false);
@@ -4425,6 +4776,7 @@
             stepCarPhysics(game.cars[i], dt);
           }
           resolveCarCollisions();
+          if (game.mode === 'online') updateOnlineRace(dt);
 
           // Ghost Recording & Playback (Time Trial)
           if (game.mode === 'timetrial' && game.player) {
