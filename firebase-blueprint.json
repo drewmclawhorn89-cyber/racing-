@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Private authenticated driver profile, garage unlocks, car customizations, and preferences synced to Google Sign-In.",
+      "description": "Private authenticated driver profile, garage unlocks, customizations, preferences, and personal lap leaderboards synced to Google Sign-In.",
       "type": "object",
       "properties": {
         "ownerId": {
@@ -56,7 +56,32 @@
           "enum": ["sunset", "day", "night", "rain"],
           "maxLength": 12
         },
+        "volume": {
+          "type": "number"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "touch": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "maxLength": 8
+        },
+        "cameraMode": {
+          "type": "number"
+        },
+        "laps": {
+          "type": "number"
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "medium", "hard"],
+          "maxLength": 12
+        },
         "custom": {
+          "type": "object"
+        },
+        "leaderboards": {
           "type": "object"
         },
         "createdAt": {
@@ -81,7 +106,53 @@
         "selectedTrack",
         "unlockedCars",
         "weather",
+        "volume",
+        "muted",
+        "touch",
+        "cameraMode",
+        "laps",
+        "difficulty",
         "custom",
+        "leaderboards",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserGhost": {
+      "title": "UserGhost",
+      "description": "Personal best Time Trial ghost replay path per circuit owned by the signed-in driver.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "trackId": {
+          "type": "string",
+          "enum": ["city", "desert", "mountain", "coastal"],
+          "maxLength": 16
+        },
+        "lapTime": {
+          "type": "number"
+        },
+        "coords": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "trackId",
+        "lapTime",
+        "coords",
         "createdAt",
         "updatedAt"
       ]
@@ -145,7 +216,13 @@
       "schema": {
         "$ref": "#/entities/UserProfile"
       },
-      "description": "Owner-isolated driver save profile with PII (email, displayName, photoURL) and garage state."
+      "description": "Owner-isolated driver save profile with PII (email, displayName, photoURL), garage state, settings, and personal lap leaderboards."
+    },
+    "/users/{userId}/ghosts/{trackId}": {
+      "schema": {
+        "$ref": "#/entities/UserGhost"
+      },
+      "description": "Owner-isolated Time Trial ghost replay path per circuit."
     },
     "/trackRecords/{recordId}": {
       "schema": {

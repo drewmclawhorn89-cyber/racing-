@@ -31,23 +31,59 @@ service cloud.firestore {
     }
 
     function isValidTrackId(t) {
-      return t is string && t.size() <= 16 && t in ['city', 'desert', 'mountain', 'coastal'];
+      return t is string && t.size() >= 1 && t.size() <= 16 && t in ['city', 'desert', 'mountain', 'coastal'];
     }
 
     function isValidWeather(w) {
-      return w is string && w.size() <= 12 && w in ['sunset', 'day', 'night', 'rain'];
+      return w is string && w.size() >= 1 && w.size() <= 12 && w in ['sunset', 'day', 'night', 'rain'];
+    }
+
+    function isValidTouch(t) {
+      return t is string && t.size() >= 1 && t.size() <= 8 && t in ['auto', 'on', 'off'];
+    }
+
+    function isValidDifficulty(d) {
+      return d is string && d.size() >= 1 && d.size() <= 12 && d in ['easy', 'medium', 'hard'];
+    }
+
+    function isValidLapList(list) {
+      return list is list
+        && list.size() <= 10
+        && (list.size() == 0 || (
+          list[0] is map
+          && list[0].keys().hasAll(['time', 'car', 'mode', 'date'])
+          && list[0].keys().hasOnly(['time', 'car', 'mode', 'date'])
+          && list[0].time is number && list[0].time > 1 && list[0].time <= 3600
+          && list[0].car is string && list[0].car.size() >= 1 && list[0].car.size() <= 40
+          && list[0].mode is string && list[0].mode.size() >= 1 && list[0].mode.size() <= 16
+          && list[0].date is string && list[0].date.size() >= 1 && list[0].date.size() <= 32
+        ));
+    }
+
+    function isValidLeaderboards(lb) {
+      return lb is map
+        && lb.keys().hasAll(['city', 'desert', 'mountain', 'coastal'])
+        && lb.keys().hasOnly(['city', 'desert', 'mountain', 'coastal'])
+        && isValidLapList(lb.city)
+        && isValidLapList(lb.desert)
+        && isValidLapList(lb.mountain)
+        && isValidLapList(lb.coastal);
     }
 
     function isValidUserProfile(data) {
       return data.keys().hasAll([
           'ownerId', 'displayName', 'email', 'photoURL', 'onlineName',
           'coins', 'xp', 'wins', 'selectedCar', 'selectedTrack',
-          'unlockedCars', 'weather', 'custom', 'createdAt', 'updatedAt'
+          'unlockedCars', 'weather', 'volume', 'muted', 'touch',
+          'cameraMode', 'laps', 'difficulty', 'custom', 'leaderboards',
+          'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
           'ownerId', 'displayName', 'email', 'photoURL', 'onlineName',
           'coins', 'xp', 'wins', 'selectedCar', 'selectedTrack',
-          'unlockedCars', 'weather', 'custom', 'createdAt', 'updatedAt'
+          'unlockedCars', 'weather', 'volume', 'muted', 'touch',
+          'cameraMode', 'laps', 'difficulty', 'custom', 'leaderboards',
+          'createdAt', 'updatedAt'
         ])
         && data.ownerId is string
         && isValidId(data.ownerId)
@@ -66,7 +102,32 @@ service cloud.firestore {
         && data.unlockedCars.size() >= 1 && data.unlockedCars.size() <= 12
         && data.unlockedCars[0] is string && data.unlockedCars[0].size() <= 20
         && isValidWeather(data.weather)
+        && data.volume is number && data.volume >= 0 && data.volume <= 1
+        && data.muted is bool
+        && isValidTouch(data.touch)
+        && data.cameraMode is number && data.cameraMode >= 0 && data.cameraMode <= 2
+        && data.laps is number && data.laps in [1, 3, 5]
+        && isValidDifficulty(data.difficulty)
         && data.custom is map && data.custom.keys().size() <= 12
+        && isValidLeaderboards(data.leaderboards)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserGhost(data) {
+      return data.keys().hasAll([
+          'ownerId', 'trackId', 'lapTime', 'coords', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'trackId', 'lapTime', 'coords', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidTrackId(data.trackId)
+        && data.lapTime is number && data.lapTime >= 0 && data.lapTime <= 3600
+        && data.coords is list && data.coords.size() <= 5400
+        && (data.coords.size() == 0 || data.coords[0] is number)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -84,7 +145,7 @@ service cloud.firestore {
         && data.driverName is string && data.driverName.size() >= 1 && data.driverName.size() <= 24
         && isValidTrackId(data.trackId)
         && data.carName is string && data.carName.size() >= 1 && data.carName.size() <= 40
-        && data.mode is string && data.mode.size() <= 16 && data.mode in ['Race', 'Time Trial', 'Online']
+        && data.mode is string && data.mode.size() >= 1 && data.mode.size() <= 16 && data.mode in ['Race', 'Time Trial', 'Online']
         && data.time is number && data.time > 1 && data.time <= 3600
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -107,9 +168,40 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'displayName', 'email', 'photoURL', 'onlineName',
           'coins', 'xp', 'wins', 'selectedCar', 'selectedTrack',
-          'unlockedCars', 'weather', 'custom', 'updatedAt'
+          'unlockedCars', 'weather', 'volume', 'muted', 'touch',
+          'cameraMode', 'laps', 'difficulty', 'custom', 'leaderboards',
+          'updatedAt'
         ]);
       allow delete: if false;
+
+      match /ghosts/{trackId} {
+        allow get: if isValidId(userId) && isValidTrackId(trackId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidTrackId(trackId)
+          && isOwner(userId)
+          && isValidUserGhost(incoming())
+          && incoming().trackId == trackId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isValidId(userId)
+          && isValidTrackId(trackId)
+          && isOwner(userId)
+          && isValidUserGhost(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().trackId == existing().trackId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'lapTime', 'coords', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isValidId(userId)
+          && isValidTrackId(trackId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+      }
     }
 
     match /trackRecords/{recordId} {
