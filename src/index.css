@@ -28,12 +28,25 @@ button { font: inherit; }
 .map-list strong, .map-list small { display: block; }
 .map-list strong { font-size: 14px; }
 .map-list small { margin-top: 3px; color: #94a3b8; }
+.records-card { position: absolute; top: 104px; right: 32px; width: 360px; padding: 16px; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; background: rgba(13,15,20,.88); pointer-events: auto; }
+.records-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; letter-spacing: .08em; }
+.connection { max-width: 175px; overflow: hidden; color: #fbbf24; font-size: 9px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.connection.online { color: #34d399; }
+.name-label { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; color: #94a3b8; font-size: 10px; letter-spacing: .08em; }
+.name-label input { width: 145px; padding: 6px 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 4px; background: #11131a; color: #fff; }
+.record-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.record-list li { display: flex; justify-content: space-between; gap: 12px; color: #cbd5e1; font-size: 12px; }
+.record-list b { color: #fbbf24; font-family: monospace; }
+.no-records { margin: 12px 0 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
+.notice { position: absolute; left: 44px; bottom: 22px; max-width: 420px; color: #34d399; font-size: 12px; pointer-events: auto; }
 .race-top { position: absolute; top: 20px; left: 20px; display: flex; gap: 8px; pointer-events: auto; }
 .race-top div { min-width: 100px; background: rgba(13,15,20,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 10px 14px; }
 .race-top span { display: block; color: #94a3b8; font-size: 9px; letter-spacing: .12em; }
-.race-top strong { font-size: 20px; }
-.exit { position: absolute; top: 20px; right: 20px; height: 38px; border-radius: 5px; background: rgba(13,15,20,.88); color: white; padding: 0 14px; pointer-events: auto; cursor: pointer; }
+.race-top strong { font-size: 16px; }
+.exit, .finish { position: absolute; top: 20px; height: 38px; border-radius: 5px; background: rgba(13,15,20,.88); color: white; padding: 0 14px; pointer-events: auto; cursor: pointer; }
+.exit { right: 20px; }
+.finish { right: 125px; border-color: #f59e0b; color: #fbbf24; }
 .speedometer { position: absolute; right: 22px; bottom: 22px; width: 150px; background: rgba(13,15,20,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 12px 18px; }
 .speedometer strong { font-size: 46px; line-height: 1; }
 .speedometer span { margin-left: 5px; color: #94a3b8; font-size: 11px; }
-@media (max-width: 800px) { .topbar { padding: 0 20px; } .map-picker { left: 20px; bottom: 300px; width: calc(100% - 40px); } .map-picker h1 { font-size: 42px; } .map-list { left: 20px; right: 20px; bottom: 20px; width: auto; grid-template-columns: 1fr 1fr; } .map-list button { height: 62px; } }
+@media (max-width: 800px) { .topbar { padding: 0 20px; } .map-picker { left: 20px; bottom: 315px; width: calc(100% - 40px); } .map-picker h1 { font-size: 42px; } .map-list { left: 20px; right: 20px; bottom: 18px; width: auto; grid-template-columns: 1fr 1fr; } .map-list button { height: 62px; padding: 6px 8px; gap: 6px; } .map-list small { font-size: 10px; } .records-card { top: 94px; left: 20px; right: 20px; width: auto; } .records-list { max-height: 80px; overflow: auto; } .notice { left: 20px; bottom: 165px; } }

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import *
- as THREE from 'three';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+import { getLeaderboard, saveRecord, type RaceRecord } from './leaderboard';
 
 type MapTheme = {
   name: string;
@@ -29,9 +29,7 @@ function buildTrack(shape: MapTheme['shape']): THREE.CatmullRomCurve3 {
       return new THREE.Vector3(Math.cos(a) * 48, 0, Math.sin(a) * 27);
     });
   } else if (shape === 'city') {
-    points = [
-      [-36,-24],[18,-25],[34,-12],[28,18],[10,25],[-18,20],[-38,8],[-36,-24]
-    ].map(([x,z]) => new THREE.Vector3(x, 0, z));
+    points = [[-36,-24],[18,-25],[34,-12],[28,18],[10,25],[-18,20],[-38,8],[-36,-24]].map(([x,z]) => new THREE.Vector3(x, 0, z));
   } else if (shape === 'mountain') {
     points = Array.from({ length: 28 }, (_, i) => {
       const a = i / 28 * Math.PI * 2;
@@ -39,11 +37,14 @@ function buildTrack(shape: MapTheme['shape']): THREE.CatmullRomCurve3 {
       return new THREE.Vector3(Math.cos(a) * r, Math.sin(a * 2) * 2, Math.sin(a) * r);
     });
   } else {
-    points = [
-      [-48,-4],[-30,-20],[0,-18],[22,-4],[44,-4],[22,4],[0,18],[-30,20],[-48,4],[-48,-4]
-    ].map(([x,z]) => new THREE.Vector3(x, 0, z));
+    points = [[-48,-4],[-30,-20],[0,-18],[22,-4],[44,-4],[22,4],[0,18],[-30,20],[-48,4],[-48,-4]].map(([x,z]) => new THREE.Vector3(x, 0, z));
   }
   return new THREE.CatmullRomCurve3(points, true, 'catmullrom', 0.12);
+}
+
+function formatTime(milliseconds: number) {
+  const seconds = milliseconds / 1000;
+  return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, '0')}`;
 }
 
 export default function App() {
@@ -51,8 +52,26 @@ export default function App() {
   const [selected, setSelected] = useState(0);
   const [started, setStarted] = useState(false);
   const [speed, setSpeed] = useState(0);
-  const [lap, setLap] = useState(1);
+  const [records, setRecords] = useState<RaceRecord[]>([]);
+  const [playerName, setPlayerName] = useState(() => localStorage.getItem('apex-player-name') || 'Racer');
+  const [databaseStatus, setDatabaseStatus] = useState('Connecting to online records…');
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+  const raceStartedAt = useRef(0);
   const map = maps[selected];
+
+  const refreshRecords = useCallback(async () => {
+    try {
+      const next = await getLeaderboard(map.name);
+      setRecords(next);
+      setDatabaseStatus('ONLINE · SUPABASE');
+    } catch (error) {
+      setRecords([]);
+      setDatabaseStatus(error instanceof Error ? error.message : 'Could not load online records');
+    }
+  }, [map.name]);
+
+  useEffect(() => { void refreshRecords(); }, [refreshRecords]);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -65,7 +84,6 @@ export default function App() {
     const camera = new THREE.PerspectiveCamera(50, mount.clientWidth / mount.clientHeight, 0.1, 300);
     camera.position.set(-58, 38, 58);
     camera.lookAt(0, 0, 0);
-
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
@@ -75,11 +93,7 @@ export default function App() {
     const sun = new THREE.DirectionalLight(0xffffff, 2.5);
     sun.position.set(-30, 60, 20);
     scene.add(sun);
-
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(240, 240),
-      new THREE.MeshStandardMaterial({ color: map.ground, roughness: 1 })
-    );
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), new THREE.MeshStandardMaterial({ color: map.ground, roughness: 1 }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.12;
     scene.add(ground);
@@ -89,52 +103,43 @@ export default function App() {
     const roadGeometry = new THREE.BufferGeometry();
     const vertices: number[] = [];
     const indices: number[] = [];
-    const width = 9;
-
     roadPoints.forEach((point, i) => {
       const next = roadPoints[(i + 1) % roadPoints.length];
       const tangent = next.clone().sub(point).normalize();
       const side = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-      vertices.push(point.x + side.x * width, 0.02, point.z + side.z * width);
-      vertices.push(point.x - side.x * width, 0.02, point.z - side.z * width);
+      vertices.push(point.x + side.x * 9, 0.02, point.z + side.z * 9);
+      vertices.push(point.x - side.x * 9, 0.02, point.z - side.z * 9);
       if (i < roadPoints.length - 1) {
-        const b = i * 2;
-        indices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+        const base = i * 2;
+        indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
       }
     });
     roadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
     roadGeometry.setIndex(indices);
     roadGeometry.computeVertexNormals();
-    scene.add(new THREE.Mesh(roadGeometry, new THREE.MeshStandardMaterial({ color: map.road, roughness: 0.85 })));
+    scene.add(new THREE.Mesh(roadGeometry, new THREE.MeshStandardMaterial({ color: map.road, roughness: 0.85, side: THREE.DoubleSide })));
 
-    const curbPositions: number[] = [];
     roadPoints.forEach((point, i) => {
       if (i % 5 !== 0) return;
       const next = roadPoints[(i + 1) % roadPoints.length];
       const tangent = next.clone().sub(point).normalize();
       const side = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-      curbPositions.push(point.x + side.x * 9.7, point.z + side.z * 9.7,
-        point.x - side.x * 9.7, point.z - side.z * 9.7);
+      [-1, 1].forEach((edge, edgeIndex) => {
+        const curb = new THREE.Mesh(
+          new THREE.BoxGeometry(1.7, 0.16, 1.05),
+          new THREE.MeshBasicMaterial({ color: (i / 5 + edgeIndex) % 2 ? map.accent : 0xffffff }),
+        );
+        curb.position.set(point.x + side.x * 9.7 * edge, 0.12, point.z + side.z * 9.7 * edge);
+        curb.rotation.y = Math.atan2(tangent.x, tangent.z);
+        scene.add(curb);
+      });
     });
-    const curbMaterial = new THREE.MeshBasicMaterial({ color: i % 2 ? map.accent : 0xffffff });
-
-    for (let i = 0; i < curbPositions.length; i += 2) {
-      const curb = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 1.5), curbMaterial);
-      curb.position.set(curbPositions[i], 0.12, curbPositions[i + 1]);
-      scene.add(curb);
-    }
 
     const car = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 0.7, 4.2),
-      new THREE.MeshStandardMaterial({ color: map.accent, metalness: 0.45, roughness: 0.32 })
-    );
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.7, 4.2), new THREE.MeshStandardMaterial({ color: map.accent, metalness: 0.45, roughness: 0.32 }));
     body.position.y = 0.7;
     car.add(body);
-    const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(1.7, 0.62, 1.9),
-      new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6, roughness: 0.18 })
-    );
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.62, 1.9), new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.6, roughness: 0.18 }));
     cabin.position.set(0, 1.35, -0.15);
     car.add(cabin);
     [[-1.15,.45,-1.35],[1.15,.45,-1.35],[-1.15,.45,1.35],[1.15,.45,1.35]].forEach(([x,y,z]) => {
@@ -157,7 +162,6 @@ export default function App() {
       car.position.copy(position);
       car.position.y = 0;
       car.rotation.y = Math.atan2(tangent.x, tangent.z);
-
       if (started) {
         const desired = position.clone().add(tangent.clone().multiplyScalar(-12)).add(new THREE.Vector3(0,7,0));
         camera.position.lerp(desired, 1 - Math.pow(0.002, dt));
@@ -166,7 +170,6 @@ export default function App() {
       renderer.render(scene, camera);
     };
     animate();
-
     const resize = () => {
       if (!mount.clientWidth || !mount.clientHeight) return;
       camera.aspect = mount.clientWidth / mount.clientHeight;
@@ -184,64 +187,70 @@ export default function App() {
 
   useEffect(() => {
     if (!started) return;
-    const timer = window.setInterval(() => {
-      setSpeed(v => {
-        const next = v < 168 ? v + 7 : 168;
-        return next;
-      });
-    }, 80);
+    const timer = window.setInterval(() => setSpeed(value => Math.min(value + 7, 168)), 80);
     return () => clearInterval(timer);
   }, [started]);
+
+  const startRace = () => {
+    setNotice('');
+    setSpeed(0);
+    raceStartedAt.current = Date.now();
+    setStarted(true);
+  };
+
+  const finishRace = async () => {
+    setStarted(false);
+    setSaving(true);
+    setNotice('Saving your record…');
+    const elapsed = Math.max(Date.now() - raceStartedAt.current, 1000);
+    try {
+      await saveRecord({ playerName, trackName: map.name, timeMs: elapsed });
+      setNotice(`Record saved online: ${formatTime(elapsed)}`);
+      await refreshRecords();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not save your record');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <main className="game">
       <div ref={mountRef} className="canvas" />
       <section className={`panel ${started ? 'racing' : ''}`}>
-        {!started ? (
-          <>
-            <header className="topbar">
-              <div className="brand">APEX <span>RUSH</span></div>
-              <div className="level">MAP SELECT</div>
-            </header>
-            <div className="map-picker">
-              <div>
-                <p className="eyebrow">RACE LOCATION</p>
-                <h1>{map.name}</h1>
-                <p className="subtitle">{map.subtitle}</p>
-                <div className="details">
-                  <span><b>{map.distance}</b> DISTANCE</span>
-                  <span><b>{map.laps}</b> LAPS</span>
-                </div>
-              </div>
-              <button className="launch" onClick={() => { setSpeed(0); setLap(1); setStarted(true); }}>
-                RACE NOW <span>›</span>
-              </button>
-            </div>
-            <div className="map-list">
-              {maps.map((item, index) => (
-                <button key={item.name} className={index === selected ? 'active' : ''} onClick={() => setSelected(index)}>
-                  <div className="map-number">0{index + 1}</div>
-                  <div>
-                    <strong>{item.name}</strong>
-                    <small>{item.subtitle}</small>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="race-top">
-              <div><span>POSITION</span><strong>1 / 6</strong></div>
-              <div><span>LAP</span><strong>{lap} / {map.laps}</strong></div>
-            </div>
-            <button className="exit" onClick={() => setStarted(false)}>EXIT RACE</button>
-            <div className="speedometer">
-              <strong>{speed}</strong>
-              <span>MPH</span>
-            </div>
-          </>
-        )}
+        {!started ? <>
+          <header className="topbar">
+            <div className="brand">APEX <span>RUSH</span></div>
+            <div className="level">MAP SELECT</div>
+          </header>
+          <div className="map-picker">
+            <p className="eyebrow">RACE LOCATION</p>
+            <h1>{map.name}</h1>
+            <p className="subtitle">{map.subtitle}</p>
+            <div className="details"><span><b>{map.distance}</b> DISTANCE</span><span><b>{map.laps}</b> LAPS</span></div>
+            <button className="launch" onClick={startRace}>RACE NOW <span>›</span></button>
+          </div>
+          <div className="map-list">
+            {maps.map((item, index) => <button key={item.name} className={index === selected ? 'active' : ''} onClick={() => setSelected(index)}>
+              <div className="map-number">0{index + 1}</div><div><strong>{item.name}</strong><small>{item.subtitle}</small></div>
+            </button>)}
+          </div>
+          <aside className="records-card">
+            <div className="records-heading"><strong>ONLINE RECORDS</strong><span className={databaseStatus.startsWith('ONLINE') ? 'connection online' : 'connection'}>{databaseStatus}</span></div>
+            <label className="name-label">RACER NAME<input maxLength={20} value={playerName} onChange={event => {
+              const value = event.target.value.replace(/[<>]/g, '').trimStart();
+              setPlayerName(value);
+              localStorage.setItem('apex-player-name', value);
+            }} /></label>
+            {records.length ? <ol className="record-list">{records.slice(0, 5).map((record, index) => <li key={record.id}><span>{index + 1}. {record.playerName}</span><b>{formatTime(record.timeMs)}</b></li>)}</ol> : <p className="no-records">{databaseStatus.startsWith('ONLINE') ? 'No records yet. Be the first!' : databaseStatus}</p>}
+          </aside>
+          {notice && <p className="notice">{notice}</p>}
+        </> : <>
+          <div className="race-top"><div><span>POSITION</span><strong>1 / 6</strong></div><div><span>TRACK</span><strong>{map.name}</strong></div></div>
+          <button className="exit" disabled={saving} onClick={() => setStarted(false)}>EXIT RACE</button>
+          <button className="finish" disabled={saving || !playerName.trim()} onClick={() => void finishRace()}>{saving ? 'SAVING…' : 'FINISH & SAVE RECORD'}</button>
+          <div className="speedometer"><strong>{speed}</strong><span>MPH</span></div>
+        </>}
       </section>
     </main>
   );
