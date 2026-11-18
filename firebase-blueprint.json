@@ -1,0 +1,157 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private authenticated driver profile, garage unlocks, car customizations, and preferences synced to Google Sign-In.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "onlineName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "coins": {
+          "type": "number"
+        },
+        "xp": {
+          "type": "number"
+        },
+        "wins": {
+          "type": "number"
+        },
+        "selectedCar": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 20
+        },
+        "selectedTrack": {
+          "type": "string",
+          "enum": ["city", "desert", "mountain", "coastal"],
+          "maxLength": 16
+        },
+        "unlockedCars": {
+          "type": "array"
+        },
+        "weather": {
+          "type": "string",
+          "enum": ["sunset", "day", "night", "rain"],
+          "maxLength": 12
+        },
+        "custom": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "displayName",
+        "email",
+        "photoURL",
+        "onlineName",
+        "coins",
+        "xp",
+        "wins",
+        "selectedCar",
+        "selectedTrack",
+        "unlockedCars",
+        "weather",
+        "custom",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TrackRecord": {
+      "title": "TrackRecord",
+      "description": "Best lap record per signed-in driver per circuit, excluding PII.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "driverName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "trackId": {
+          "type": "string",
+          "enum": ["city", "desert", "mountain", "coastal"],
+          "maxLength": 16
+        },
+        "carName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["Race", "Time Trial", "Online"],
+          "maxLength": 16
+        },
+        "time": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "driverName",
+        "trackId",
+        "carName",
+        "mode",
+        "time",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Owner-isolated driver save profile with PII (email, displayName, photoURL) and garage state."
+    },
+    "/trackRecords/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/TrackRecord"
+      },
+      "description": "Best lap leaderboard records per driver and circuit without PII."
+    }
+  }
+}

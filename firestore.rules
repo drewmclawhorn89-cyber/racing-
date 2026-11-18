@@ -1,0 +1,138 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedSignedIn() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidTrackId(t) {
+      return t is string && t.size() <= 16 && t in ['city', 'desert', 'mountain', 'coastal'];
+    }
+
+    function isValidWeather(w) {
+      return w is string && w.size() <= 12 && w in ['sunset', 'day', 'night', 'rain'];
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'ownerId', 'displayName', 'email', 'photoURL', 'onlineName',
+          'coins', 'xp', 'wins', 'selectedCar', 'selectedTrack',
+          'unlockedCars', 'weather', 'custom', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'displayName', 'email', 'photoURL', 'onlineName',
+          'coins', 'xp', 'wins', 'selectedCar', 'selectedTrack',
+          'unlockedCars', 'weather', 'custom', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60
+        && data.email is string && data.email.size() <= 120
+        && data.photoURL is string && data.photoURL.size() <= 400
+        && data.onlineName is string && data.onlineName.size() >= 1 && data.onlineName.size() <= 16
+        && data.coins is number && data.coins >= 0 && data.coins <= 100000000
+        && data.xp is number && data.xp >= 0 && data.xp <= 100000000
+        && data.wins is number && data.wins >= 0 && data.wins <= 1000000
+        && data.selectedCar is string && data.selectedCar.size() >= 1 && data.selectedCar.size() <= 20
+        && data.selectedCar.matches('^[a-zA-Z0-9_\\-]+$')
+        && isValidTrackId(data.selectedTrack)
+        && data.unlockedCars is list
+        && data.unlockedCars.size() >= 1 && data.unlockedCars.size() <= 12
+        && data.unlockedCars[0] is string && data.unlockedCars[0].size() <= 20
+        && isValidWeather(data.weather)
+        && data.custom is map && data.custom.keys().size() <= 12
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrackRecord(data) {
+      return data.keys().hasAll([
+          'userId', 'driverName', 'trackId', 'carName', 'mode', 'time', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'driverName', 'trackId', 'carName', 'mode', 'time', 'createdAt', 'updatedAt'
+        ])
+        && data.userId is string
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.driverName is string && data.driverName.size() >= 1 && data.driverName.size() <= 24
+        && isValidTrackId(data.trackId)
+        && data.carName is string && data.carName.size() >= 1 && data.carName.size() <= 40
+        && data.mode is string && data.mode.size() <= 16 && data.mode in ['Race', 'Time Trial', 'Online']
+        && data.time is number && data.time > 1 && data.time <= 3600
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'email', 'photoURL', 'onlineName',
+          'coins', 'xp', 'wins', 'selectedCar', 'selectedTrack',
+          'unlockedCars', 'weather', 'custom', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /trackRecords/{recordId} {
+      allow get: if isValidId(recordId) && isVerifiedSignedIn();
+      allow list: if isVerifiedSignedIn() && resource.data.time > 1;
+      allow create: if isValidId(recordId)
+        && isVerifiedSignedIn()
+        && isValidTrackRecord(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(recordId)
+        && isVerifiedSignedIn()
+        && existing().userId == request.auth.uid
+        && isValidTrackRecord(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'driverName', 'trackId', 'carName', 'mode', 'time', 'updatedAt'
+        ]);
+      allow delete: if isValidId(recordId)
+        && isVerifiedSignedIn()
+        && existing().userId == request.auth.uid;
+    }
+  }
+}

@@ -198,6 +198,68 @@
       font-weight: 700;
     }
 
+    .auth-slot {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-left: 16px;
+      border-left: 1px solid var(--border);
+    }
+
+    .auth-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-strong);
+      color: var(--text);
+    }
+
+    .auth-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+    }
+
+    .auth-user-chip {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 0.86rem;
+      color: var(--text);
+    }
+
+    .auth-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      object-fit: cover;
+      border: 1px solid var(--border-strong);
+      background: var(--accent);
+      color: #09090b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 0.78rem;
+      flex-shrink: 0;
+    }
+
+    .online-auth-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: rgba(245, 158, 11, 0.08);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
     .menu-body {
       display: flex;
       align-items: flex-end;
@@ -1164,6 +1226,7 @@
           <div class="profile-stat">Wins <strong id="menu-wins" class="tabular">0</strong></div>
           <div class="profile-stat">XP <strong id="menu-xp" class="tabular">0</strong></div>
           <div class="profile-stat">Best Lap <strong id="menu-best-lap" class="tabular">--:--.--</strong></div>
+          <div id="menu-auth-slot" class="auth-slot"></div>
         </div>
       </header>
 
@@ -1224,6 +1287,7 @@
 
           <div class="section-block" id="setup-online" style="display:none;">
             <div class="section-label">Online Multiplayer Lobby</div>
+            <div id="online-auth-banner" class="online-auth-banner"></div>
             <div id="online-join-form" class="online-form">
               <div class="online-field-row">
                 <label class="online-field">
@@ -1357,11 +1421,17 @@
         </div>
       </div>
 
-      <div class="seg-row" id="lb-track-tabs" style="max-width:720px;"></div>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between;">
+        <div class="seg-row" id="lb-track-tabs" style="max-width:620px; flex:1;"></div>
+        <div class="seg-row" id="lb-scope-tabs" style="width:280px;">
+          <button class="seg-btn active" data-scope="local">My Records</button>
+          <button class="seg-btn" data-scope="global">Global (Google)</button>
+        </div>
+      </div>
 
       <div class="table-wrap" style="max-width:960px;">
         <table>
-          <thead>
+          <thead id="lb-thead">
             <tr>
               <th>Rank</th>
               <th>Best Lap</th>
@@ -1421,9 +1491,10 @@
         </div>
 
         <div class="section-block">
-          <div class="section-label">Save Data</div>
+          <div class="section-label">Driver Account &amp; Save Data</div>
+          <div id="settings-auth-box" style="display:flex; flex-direction:column; gap:10px;"></div>
           <p style="font-size:0.82rem; color:var(--text-muted);">
-            Progress, unlocked cars, customizations, and track records are saved locally in your browser.
+            Progress, unlocked cars, customizations, and track records save locally and sync automatically to your Google account when signed in.
           </p>
           <div id="reset-confirm-row" style="display:flex; gap:10px; align-items:center;">
             <button id="btn-reset-save" class="btn-danger" style="padding:10px 16px; border-radius:6px; font-weight:700;">Reset Progress</button>
@@ -1604,6 +1675,15 @@
     import * as THREE from 'three';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { OnlineRoom, generateRoomCode, normalizeRoomCode, isOnlineConfigured, fetchPublicRooms } from '/src/online.ts';
+    import {
+      signInWithGoogle,
+      signOutGoogle,
+      subscribeAuth,
+      loadUserCloudSave,
+      saveUserCloudSave,
+      submitGlobalTrackRecord,
+      fetchGlobalTrackRecords
+    } from '/src/firebase.ts';
 
     // =========================================================================
     // 1. DATA DEFINITIONS & PERSISTENT SAVE STATE
@@ -1847,11 +1927,26 @@
     }
 
     let saveData = loadSave();
+    let currentAuthUser = null;
+    let authBusy = false;
+    let authErrorMsg = '';
+    let cloudSyncTimer = null;
+
     function persistSave() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(saveData));
       } catch {
         // Ignore quota errors cleanly
+      }
+      if (currentAuthUser) {
+        if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+        cloudSyncTimer = setTimeout(() => {
+          if (currentAuthUser) {
+            saveUserCloudSave(currentAuthUser, saveData).catch((err) => {
+              console.warn('Cloud save sync skipped:', err);
+            });
+          }
+        }, 650);
       }
     }
 
@@ -3464,16 +3559,26 @@
 
     function recordLapLeaderboard(lapTime) {
       const tid = activeTrackData.def.id;
+      const modeLabel = game.mode === 'timetrial' ? 'Time Trial' : game.mode === 'online' ? 'Online' : 'Race';
       const list = saveData.leaderboards[tid] || [];
       list.push({
         time: lapTime,
         car: game.player.carDef.name,
-        mode: game.mode === 'timetrial' ? 'Time Trial' : 'Race',
+        mode: modeLabel,
         date: new Date().toLocaleDateString()
       });
       list.sort((a, b) => a.time - b.time);
       saveData.leaderboards[tid] = list.slice(0, 10);
       persistSave();
+      if (currentAuthUser) {
+        submitGlobalTrackRecord(currentAuthUser, {
+          trackId: tid,
+          carName: game.player.carDef.name,
+          mode: modeLabel,
+          time: lapTime,
+          driverName: saveData.onlineName || currentAuthUser.displayName || 'Driver'
+        }).catch((err) => console.warn('Global record submit failed:', err));
+      }
     }
 
     function getStandings() {
@@ -4231,6 +4336,171 @@
       const sel = CARS.find(c => c.id === saveData.selectedCar) || CARS[0];
       document.getElementById('menu-car-name').textContent = sel.name;
       document.getElementById('menu-car-meta').textContent = sel.subtitle;
+      renderAuthUI();
+    }
+
+    const GOOGLE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="#EA4335" d="M12 10.2v3.9h5.5c-.2 1.3-1.5 3.8-5.5 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.9 1.5l2.6-2.5C16.8 3.3 14.6 2.4 12 2.4 6.7 2.4 2.4 6.7 2.4 12S6.7 21.6 12 21.6c6.9 0 9.1-4.8 9.1-7.3 0-.5 0-.9-.1-1.3H12z"/></svg>';
+
+    async function handleGoogleSignIn() {
+      if (authBusy) return;
+      authBusy = true;
+      authErrorMsg = '';
+      renderAuthUI();
+      try {
+        await signInWithGoogle();
+      } catch (err) {
+        authErrorMsg = err?.message || 'Google Sign-In failed.';
+      } finally {
+        authBusy = false;
+        renderAuthUI();
+      }
+    }
+
+    async function handleGoogleSignOut() {
+      if (authBusy) return;
+      authBusy = true;
+      authErrorMsg = '';
+      renderAuthUI();
+      try {
+        await signOutGoogle();
+      } catch (err) {
+        authErrorMsg = err?.message || 'Sign-out failed.';
+      } finally {
+        authBusy = false;
+        renderAuthUI();
+      }
+    }
+
+    function createAvatarEl(user) {
+      if (user.photoURL) {
+        const img = document.createElement('img');
+        img.className = 'auth-avatar';
+        img.src = user.photoURL;
+        img.alt = user.displayName || 'Driver';
+        img.referrerPolicy = 'no-referrer';
+        return img;
+      }
+      const div = document.createElement('div');
+      div.className = 'auth-avatar';
+      div.textContent = (user.displayName || user.email || 'D').slice(0, 1).toUpperCase();
+      return div;
+    }
+
+    function renderAuthUI() {
+      // 1. Main Menu topbar slot
+      const menuSlot = document.getElementById('menu-auth-slot');
+      if (menuSlot) {
+        menuSlot.innerHTML = '';
+        if (currentAuthUser) {
+          const chip = document.createElement('div');
+          chip.className = 'auth-user-chip';
+          chip.appendChild(createAvatarEl(currentAuthUser));
+          const label = document.createElement('span');
+          label.style.fontWeight = '700';
+          label.textContent = currentAuthUser.displayName || currentAuthUser.email || 'Driver';
+          chip.appendChild(label);
+          const outBtn = document.createElement('button');
+          outBtn.className = 'btn-sm';
+          outBtn.disabled = authBusy;
+          outBtn.textContent = authBusy ? '...' : 'Sign Out';
+          outBtn.onclick = handleGoogleSignOut;
+          menuSlot.append(chip, outBtn);
+        } else {
+          const inBtn = document.createElement('button');
+          inBtn.className = 'auth-btn';
+          inBtn.disabled = authBusy;
+          inBtn.innerHTML = `${GOOGLE_ICON_SVG}<span>${authBusy ? 'Signing in...' : 'Sign in with Google'}</span>`;
+          inBtn.onclick = handleGoogleSignIn;
+          menuSlot.appendChild(inBtn);
+        }
+      }
+
+      // 2. Online Lobby banner
+      const onlineBanner = document.getElementById('online-auth-banner');
+      if (onlineBanner) {
+        onlineBanner.innerHTML = '';
+        if (currentAuthUser) {
+          const left = document.createElement('div');
+          left.className = 'auth-user-chip';
+          left.appendChild(createAvatarEl(currentAuthUser));
+          const txt = document.createElement('span');
+          txt.textContent = `Signed in as ${currentAuthUser.displayName || currentAuthUser.email}`;
+          left.appendChild(txt);
+          const right = document.createElement('span');
+          right.style.color = 'var(--emerald)';
+          right.style.fontWeight = '700';
+          right.textContent = 'Google Synced';
+          onlineBanner.append(left, right);
+        } else {
+          const msg = document.createElement('span');
+          msg.textContent = 'Optional: sign in with Google to use your profile & save global records';
+          const btn = document.createElement('button');
+          btn.className = 'btn-sm';
+          btn.disabled = authBusy;
+          btn.innerHTML = `${GOOGLE_ICON_SVG} Sign In`;
+          btn.style.display = 'inline-flex';
+          btn.style.alignItems = 'center';
+          btn.style.gap = '6px';
+          btn.onclick = handleGoogleSignIn;
+          onlineBanner.append(msg, btn);
+        }
+      }
+
+      // 3. Settings Account section
+      const setAuthBox = document.getElementById('settings-auth-box');
+      if (setAuthBox) {
+        setAuthBox.innerHTML = '';
+        if (currentAuthUser) {
+          const row = document.createElement('div');
+          row.style.display = 'flex';
+          row.style.alignItems = 'center';
+          row.style.justifyContent = 'space-between';
+          row.style.gap = '12px';
+          const info = document.createElement('div');
+          info.className = 'auth-user-chip';
+          info.appendChild(createAvatarEl(currentAuthUser));
+          const meta = document.createElement('div');
+          const n = document.createElement('div');
+          n.style.fontWeight = '700';
+          n.textContent = currentAuthUser.displayName || 'Google Driver';
+          const e = document.createElement('div');
+          e.style.fontSize = '0.78rem';
+          e.style.color = 'var(--text-muted)';
+          e.textContent = currentAuthUser.email || 'Cloud Sync Active';
+          meta.append(n, e);
+          info.appendChild(meta);
+          const actions = document.createElement('div');
+          actions.style.display = 'flex';
+          actions.style.gap = '8px';
+          const outBtn = document.createElement('button');
+          outBtn.className = 'btn-back';
+          outBtn.disabled = authBusy;
+          outBtn.textContent = 'Sign Out';
+          outBtn.onclick = handleGoogleSignOut;
+          actions.appendChild(outBtn);
+          row.append(info, actions);
+          setAuthBox.appendChild(row);
+        } else {
+          const row = document.createElement('div');
+          row.style.display = 'flex';
+          row.style.alignItems = 'center';
+          row.style.gap = '10px';
+          const inBtn = document.createElement('button');
+          inBtn.className = 'auth-btn';
+          inBtn.disabled = authBusy;
+          inBtn.innerHTML = `${GOOGLE_ICON_SVG}<span>${authBusy ? 'Signing in...' : 'Sign in with Google'}</span>`;
+          inBtn.onclick = handleGoogleSignIn;
+          row.appendChild(inBtn);
+          if (authErrorMsg) {
+            const err = document.createElement('span');
+            err.style.fontSize = '0.8rem';
+            err.style.color = '#f87171';
+            err.textContent = authErrorMsg;
+            row.appendChild(err);
+          }
+          setAuthBox.appendChild(row);
+        }
+      }
     }
 
     function renderStatBars(container, stats) {
@@ -4632,19 +4902,114 @@
       });
     }
 
-    function renderLeaderboard(trackId) {
+    let activeLeaderboardTrack = 'city';
+    let activeLeaderboardScope = 'local';
+
+    async function renderLeaderboard(trackId = activeLeaderboardTrack, scope = activeLeaderboardScope) {
+      activeLeaderboardTrack = trackId;
+      activeLeaderboardScope = scope;
+
       const tabs = document.getElementById('lb-track-tabs');
       tabs.innerHTML = '';
       TRACKS.forEach(tr => {
         const b = document.createElement('button');
         b.className = `seg-btn${trackId === tr.id ? ' active' : ''}`;
         b.textContent = tr.name;
-        b.onclick = () => renderLeaderboard(tr.id);
+        b.onclick = () => renderLeaderboard(tr.id, activeLeaderboardScope);
         tabs.appendChild(b);
       });
 
-      const rows = saveData.leaderboards[trackId] || [];
+      document.querySelectorAll('#lb-scope-tabs button').forEach(b => {
+        b.classList.toggle('active', b.dataset.scope === activeLeaderboardScope);
+        b.onclick = () => renderLeaderboard(activeLeaderboardTrack, b.dataset.scope);
+      });
+
+      const thead = document.getElementById('lb-thead');
       const tbody = document.getElementById('lb-tbody');
+
+      if (activeLeaderboardScope === 'global') {
+        thead.innerHTML = `
+          <tr>
+            <th>Rank</th>
+            <th>Driver</th>
+            <th>Best Lap</th>
+            <th>Car</th>
+            <th>Mode</th>
+          </tr>
+        `;
+        if (!currentAuthUser) {
+          tbody.innerHTML = '';
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 5;
+          td.style.textAlign = 'center';
+          td.style.padding = '28px';
+          td.style.color = 'var(--text-muted)';
+          const wrap = document.createElement('div');
+          wrap.style.display = 'inline-flex';
+          wrap.style.flexDirection = 'column';
+          wrap.style.alignItems = 'center';
+          wrap.style.gap = '12px';
+          const msg = document.createElement('span');
+          msg.textContent = 'Sign in with Google to view global driver lap records and submit your best laps.';
+          const btn = document.createElement('button');
+          btn.className = 'auth-btn';
+          btn.innerHTML = `${GOOGLE_ICON_SVG}<span>Sign in with Google</span>`;
+          btn.onclick = handleGoogleSignIn;
+          wrap.append(msg, btn);
+          td.appendChild(wrap);
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+
+        tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted); text-align:center; padding:28px;">Loading global records...</td></tr>`;
+        try {
+          const records = await fetchGlobalTrackRecords(trackId);
+          if (activeLeaderboardTrack !== trackId || activeLeaderboardScope !== 'global') return;
+          if (!records.length) {
+            tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted); text-align:center; padding:28px;">No global lap times recorded yet on this circuit.</td></tr>`;
+            return;
+          }
+          tbody.innerHTML = '';
+          records.forEach((r, i) => {
+            const tr = document.createElement('tr');
+            if (r.userId === currentAuthUser.uid) tr.style.background = 'rgba(245, 158, 11, 0.12)';
+            const tdRank = document.createElement('td');
+            tdRank.className = 'tabular';
+            tdRank.style.fontWeight = '700';
+            tdRank.textContent = `#${i + 1}`;
+            const tdDriver = document.createElement('td');
+            tdDriver.style.fontWeight = r.userId === currentAuthUser.uid ? '800' : '600';
+            tdDriver.textContent = r.userId === currentAuthUser.uid ? `${r.driverName} (You)` : r.driverName;
+            const tdTime = document.createElement('td');
+            tdTime.className = 'tabular';
+            tdTime.style.color = 'var(--accent)';
+            tdTime.style.fontWeight = '700';
+            tdTime.textContent = formatTime(r.time);
+            const tdCar = document.createElement('td');
+            tdCar.textContent = r.carName;
+            const tdMode = document.createElement('td');
+            tdMode.textContent = r.mode;
+            tr.append(tdRank, tdDriver, tdTime, tdCar, tdMode);
+            tbody.appendChild(tr);
+          });
+        } catch {
+          tbody.innerHTML = `<tr><td colspan="5" style="color:#f87171; text-align:center; padding:28px;">Could not load global records right now.</td></tr>`;
+        }
+        return;
+      }
+
+      thead.innerHTML = `
+        <tr>
+          <th>Rank</th>
+          <th>Best Lap</th>
+          <th>Car</th>
+          <th>Mode</th>
+          <th>Date</th>
+        </tr>
+      `;
+      const rows = saveData.leaderboards[trackId] || [];
       if (rows.length === 0) {
         tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted); text-align:center; padding:28px;">No lap times recorded yet on this track.</td></tr>`;
         return;
@@ -4673,6 +5038,7 @@
       document.querySelectorAll('#set-touch button').forEach(b => {
         b.classList.toggle('active', b.dataset.touch === saveData.settings.touch);
       });
+      renderAuthUI();
     }
 
     function updateTouchVisibility() {
@@ -5092,6 +5458,67 @@
       if (isSoftwareGl) afterDraw(tick);
       else requestAnimationFrame(tick);
     }
+
+    // Subscribe to Google Sign-In state & Cloud Save
+    subscribeAuth(async (user) => {
+      currentAuthUser = user;
+      if (user) {
+        if (!saveData.onlineName || saveData.onlineName === 'Driver') {
+          saveData.onlineName = (user.displayName || 'Driver').trim().slice(0, 16) || 'Driver';
+          const nameInput = document.getElementById('online-name');
+          if (nameInput) nameInput.value = saveData.onlineName;
+        }
+        try {
+          const cloud = await loadUserCloudSave(user.uid);
+          if (cloud) {
+            saveData.coins = Math.max(saveData.coins, Number(cloud.coins) || 0);
+            saveData.xp = Math.max(saveData.xp, Number(cloud.xp) || 0);
+            saveData.wins = Math.max(saveData.wins, Number(cloud.wins) || 0);
+            if (Array.isArray(cloud.unlockedCars)) {
+              const merged = new Set([...saveData.unlockedCars, ...cloud.unlockedCars]);
+              saveData.unlockedCars = Array.from(merged);
+            }
+            if (cloud.custom && typeof cloud.custom === 'object') {
+              saveData.custom = { ...saveData.custom, ...cloud.custom };
+            }
+            if (cloud.selectedCar && CARS.some(c => c.id === cloud.selectedCar)) {
+              saveData.selectedCar = cloud.selectedCar;
+            }
+            if (cloud.selectedTrack && TRACKS.some(t => t.id === cloud.selectedTrack)) {
+              saveData.selectedTrack = cloud.selectedTrack;
+            }
+            if (cloud.onlineName) {
+              saveData.onlineName = cloud.onlineName;
+              const nameInput = document.getElementById('online-name');
+              if (nameInput) nameInput.value = saveData.onlineName;
+            }
+            syncWinUnlocks();
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(saveData));
+          } else {
+            await saveUserCloudSave(user, saveData);
+          }
+        } catch (err) {
+          console.warn('Cloud save load/sync warning:', err);
+        }
+        if (game.online.room) {
+          game.online.room.updateProfile(onlineProfile());
+        }
+      }
+
+      renderAuthUI();
+      if (game.screen === 'menu') {
+        refreshMenuStats();
+        spawnShowcaseCar(saveData.selectedCar);
+      } else if (game.screen === 'setup') {
+        renderSetup();
+      } else if (game.screen === 'garage') {
+        renderGarage();
+      } else if (game.screen === 'leaderboard') {
+        renderLeaderboard();
+      } else if (game.screen === 'settings') {
+        renderSettings();
+      }
+    });
 
     // Boot directly into Main Menu with live 3D showcase
     showScreen('menu');
