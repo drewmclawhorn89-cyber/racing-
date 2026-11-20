@@ -371,7 +371,7 @@ export default function App() {
               </div>
               <div>
                 <h1 className="font-display font-black text-lg tracking-tight leading-none text-white">
-                  SKYDROP <span className="text-amber-400">ROYALE</span>
+                  SKYDROP <span className="text-amber-400">CITY</span>
                 </h1>
                 <p className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">
                   Cartoon Island Battle Royale

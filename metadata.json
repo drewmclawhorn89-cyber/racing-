@@ -1,6 +1,6 @@
 {
   "name": "Apex Rush Racing",
-  "description": "SkyDrop Royale — Original cartoon 3D Battle Royale with 100-player Solo/Duo/Squad, Zero Build & Creative modes, 7 island zones, building, Battle Pass, Shop, Locker, and Google cloud sync.",
+  "description": "SkyDrop City — Gritty open-world 3D crime-city Battle Royale with 100-player Solo/Duo/Squad, Zero Build & Creative modes, 7 island zones, building, Battle Pass, Shop, Locker, and Google cloud sync.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

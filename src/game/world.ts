@@ -110,88 +110,84 @@ export function groundHeightAt(x: number, z: number): number {
 }
 
 function biomeColorAt(x: number, z: number, y: number): THREE.Color {
-  const c = new THREE.Color('#56c257'); // Clover Meadows vibrant green
+  const c = new THREE.Color('#6f7a4a'); // dry scrubland
   const dist = Math.hypot(x, z);
   if (dist > ISLAND_RADIUS - 14) {
-    return new THREE.Color('#f7d788'); // sandy beach ring
+    return new THREE.Color('#d9c7a0'); // sandy beach ring
   }
 
   const dCity = Math.hypot(x - 35, z - -35);
   if (dCity < 62) {
-    return new THREE.Color(dCity < 46 ? '#94a3b8' : '#7dd3fc').lerp(new THREE.Color('#64748b'), 0.45);
+    return new THREE.Color(dCity < 46 ? '#3b3f45' : '#55595f').lerp(new THREE.Color('#2a2d31'), 0.3);
   }
 
   const dFactory = Math.hypot(x - 195, z - -115);
   if (dFactory < 68) {
-    return new THREE.Color('#64748b');
+    return new THREE.Color('#4a4d52');
   }
 
   const dMtn = Math.hypot(x - 0, z - -210);
   if (dMtn < 98 || y > 13.5) {
     const t = Math.min(1, Math.max(0, (y - 8) / 10 + (1 - Math.min(1, dMtn / 98)) * 0.7));
-    return c.lerp(new THREE.Color('#f1f5f9'), t);
+    return c.lerp(new THREE.Color('#8a7f73'), t);
   }
 
   const dDes = Math.hypot(x - 205, z - 145);
   if (dDes < 115) {
     const t = Math.min(1, (1 - dDes / 115) * 1.45);
-    return c.lerp(new THREE.Color('#f5b952'), t);
+    return c.lerp(new THREE.Color('#c9a26b'), t);
   }
 
   const dForest = Math.hypot(x - -195, z - -125);
   if (dForest < 105) {
     const t = Math.min(1, (1 - dForest / 105) * 1.3);
-    return c.lerp(new THREE.Color('#2d8a4e'), t);
+    return c.lerp(new THREE.Color('#4d6a3a'), t);
   }
 
   const dLake = Math.hypot(x - -175, z - 95);
   if (dLake < 72) {
-    return new THREE.Color('#eab308').lerp(new THREE.Color('#38bdf8'), 0.35);
+    return new THREE.Color('#8a7a55').lerp(new THREE.Color('#3b6f80'), 0.35);
   }
 
   return c;
 }
 
 export function buildSkyBus(): THREE.Group {
+  // Transport helicopter (kept under the same name so engine logic is unchanged)
   const g = new THREE.Group();
-  const busBody = new THREE.Mesh(
-    new THREE.BoxGeometry(4.2, 3.2, 9.6),
-    new THREE.MeshStandardMaterial({ color: '#0284c7', roughness: 0.4, metalness: 0.15 })
-  );
-  busBody.castShadow = true;
-  const stripe = new THREE.Mesh(
-    new THREE.BoxGeometry(4.32, 0.7, 9.7),
-    new THREE.MeshStandardMaterial({ color: '#facc15', roughness: 0.35 })
-  );
-  stripe.position.y = -0.35;
-  const windows = new THREE.Mesh(
-    new THREE.BoxGeometry(4.3, 1.0, 7.6),
-    new THREE.MeshStandardMaterial({ color: '#bae6fd', emissive: '#38bdf8', emissiveIntensity: 0.25 })
-  );
-  windows.position.y = 0.55;
-  const balloon = new THREE.Mesh(
-    new THREE.SphereGeometry(4.4, 18, 14),
-    new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.45 })
-  );
-  balloon.scale.set(0.95, 0.85, 1.45);
-  balloon.position.y = 6.2;
-  const band = new THREE.Mesh(
-    new THREE.TorusGeometry(4.2, 0.3, 8, 20),
-    new THREE.MeshStandardMaterial({ color: '#38bdf8', roughness: 0.4 })
-  );
-  band.rotation.y = Math.PI / 2;
-  band.position.y = 6.2;
-
-  // Rope struts
-  for (const [rx, rz] of [[-1.6, -3], [1.6, -3], [-1.6, 3], [1.6, 3]]) {
-    const rope = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 4.2, 6),
-      new THREE.MeshStandardMaterial({ color: '#f8fafc' })
-    );
-    rope.position.set(rx, 3.2, rz);
-    g.add(rope);
+  const dark = new THREE.MeshStandardMaterial({ color: '#1b1d21', roughness: 0.5, metalness: 0.5 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(1.7, 4.6, 6, 12), new THREE.MeshStandardMaterial({ color: '#2b2f36', roughness: 0.45, metalness: 0.4 }));
+  body.rotation.x = Math.PI / 2;
+  body.scale.set(1, 1, 0.95);
+  body.castShadow = true;
+  const glass = new THREE.Mesh(new THREE.SphereGeometry(1.45, 14, 10), new THREE.MeshStandardMaterial({ color: '#0e1a24', emissive: '#ffb347', emissiveIntensity: 0.2, roughness: 0.1, metalness: 0.7 }));
+  glass.scale.set(1, 0.8, 1.2);
+  glass.position.set(0, 0.4, 3.1);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.45, 0.22, 6.4), new THREE.MeshStandardMaterial({ color: '#e8b923', roughness: 0.4 }));
+  stripe.position.y = -0.3;
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 6), dark);
+  tail.position.set(0, 0.5, -6.2);
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.8, 1.1), dark);
+  fin.position.set(0, 1.3, -8.9);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.9, 8), dark);
+  mast.position.y = 2.2;
+  const rotor = new THREE.Group();
+  for (let i = 0; i < 2; i++) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(14, 0.06, 0.45), dark);
+    blade.rotation.y = i * Math.PI / 2;
+    rotor.add(blade);
   }
-  g.add(busBody, stripe, windows, balloon, band);
+  rotor.position.y = 2.7;
+  rotor.userData.spin = true;
+  const skidMat = dark;
+  for (const sx of [-1.5, 1.5]) {
+    const skid = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 5), skidMat);
+    skid.position.set(sx, -2, 0.4);
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 0.1), skidMat);
+    leg.position.set(sx, -1.4, 1.4);
+    g.add(skid, leg);
+  }
+  g.add(body, glass, stripe, tail, fin, mast, rotor);
   return g;
 }
 
@@ -214,12 +210,12 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
 
   // 1. Bright Daytime Sky Dome
   const skyGeo = new THREE.SphereGeometry(980, 24, 16);
-  const skyMat = new THREE.MeshBasicMaterial({ color: '#63c5ff', side: THREE.BackSide });
+  const skyMat = new THREE.MeshBasicMaterial({ color: '#f0a56d', side: THREE.BackSide });
   const skyDome = new THREE.Mesh(skyGeo, skyMat);
   group.add(skyDome);
 
-  // Fluffy Cartoon Clouds
-  const cloudMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0 });
+  // Smoggy sunset haze clouds
+  const cloudMat = new THREE.MeshStandardMaterial({ color: '#ffd9b0', roughness: 0.95, metalness: 0, transparent: true, opacity: 0.7 });
   for (let i = 0; i < 24; i++) {
     const ang = (i / 24) * Math.PI * 2;
     const rad = 260 + (i % 3) * 110;
@@ -236,7 +232,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
   // 2. Ocean Water Plane & Crystal Basin Lake Water
   const ocean = new THREE.Mesh(
     new THREE.CircleGeometry(960, 48),
-    new THREE.MeshStandardMaterial({ color: '#0ea5e9', roughness: 0.25, metalness: 0.12 })
+    new THREE.MeshStandardMaterial({ color: '#1f5a73', roughness: 0.18, metalness: 0.3 })
   );
   ocean.rotation.x = -Math.PI / 2;
   ocean.position.y = -2.2;
@@ -245,7 +241,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
   const lakeWater = new THREE.Mesh(
     new THREE.CircleGeometry(68, 32),
     new THREE.MeshStandardMaterial({
-      color: '#22d3ee',
+      color: '#2d7a8a',
       roughness: 0.18,
       metalness: 0.15,
       transparent: true,
@@ -256,7 +252,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
   lakeWater.position.set(-175, -0.4, 95);
   group.add(lakeWater);
 
-  // 3. Vertex-Colored Cartoon Terrain Mesh
+  // 3. Vertex-Colored Urban Terrain Mesh
   const segs = 112;
   const span = 880;
   const terrainGeo = new THREE.PlaneGeometry(span, span, segs, segs);
@@ -285,12 +281,12 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
   group.add(terrainMesh);
 
   // Helper creators for props
-  const woodMat = new THREE.MeshStandardMaterial({ color: '#8b5a2b', roughness: 0.85 });
-  const leafGreen = new THREE.MeshStandardMaterial({ color: '#22c55e', roughness: 0.75 });
-  const leafDark = new THREE.MeshStandardMaterial({ color: '#15803d', roughness: 0.78 });
-  const leafSnow = new THREE.MeshStandardMaterial({ color: '#e0f2fe', roughness: 0.7 });
-  const rockMat = new THREE.MeshStandardMaterial({ color: '#94a3b8', roughness: 0.82 });
-  const cactusMat = new THREE.MeshStandardMaterial({ color: '#16a34a', roughness: 0.72 });
+  const woodMat = new THREE.MeshStandardMaterial({ color: '#5b4330', roughness: 0.9 });
+  const leafGreen = new THREE.MeshStandardMaterial({ color: '#4f7a3a', roughness: 0.85 });
+  const leafDark = new THREE.MeshStandardMaterial({ color: '#2f5a32', roughness: 0.85 });
+  const leafSnow = new THREE.MeshStandardMaterial({ color: '#cfc7bd', roughness: 0.8 });
+  const rockMat = new THREE.MeshStandardMaterial({ color: '#6b6b6b', roughness: 0.9 });
+  const cactusMat = new THREE.MeshStandardMaterial({ color: '#5f8a4a', roughness: 0.8 });
 
   const addTree = (id: string, x: number, z: number, pine: boolean, snow: boolean) => {
     const y = groundHeightAt(x, z);
@@ -337,7 +333,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
     const y = groundHeightAt(x, z);
     if (y < 0.2) return;
     const rGroup = new THREE.Group();
-    const mat = desert ? new THREE.MeshStandardMaterial({ color: '#d97706', roughness: 0.8 }) : rockMat;
+    const mat = desert ? new THREE.MeshStandardMaterial({ color: '#a9733a', roughness: 0.9 }) : rockMat;
     const m1 = new THREE.Mesh(new THREE.DodecahedronGeometry(1.9, 0), mat);
     m1.scale.set(1.2, 0.85, 1.0);
     m1.position.y = 1.2;
@@ -366,22 +362,22 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
     const hGroup = new THREE.Group();
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(w, h, d),
-      new THREE.MeshStandardMaterial({ color: wallHex, roughness: 0.72 })
+      new THREE.MeshStandardMaterial({ color: wallHex, roughness: 0.92 })
     );
     body.position.y = h / 2;
     body.castShadow = true;
     body.receiveShadow = true;
     hGroup.add(body);
 
-    // Bright cartoon door & windows
+    // Dark glass door & windows
     const door = new THREE.Mesh(
       new THREE.BoxGeometry(1.7, 2.7, 0.25),
-      new THREE.MeshStandardMaterial({ color: '#78350f', roughness: 0.65 })
+      new THREE.MeshStandardMaterial({ color: '#2b2b2e', roughness: 0.5, metalness: 0.3 })
     );
     door.position.set(0, 1.35, d / 2 + 0.05);
     hGroup.add(door);
 
-    const winMat = new THREE.MeshStandardMaterial({ color: '#bae6fd', emissive: '#38bdf8', emissiveIntensity: 0.15 });
+    const winMat = new THREE.MeshStandardMaterial({ color: '#1c2a38', emissive: '#ffb347', emissiveIntensity: 0.35, metalness: 0.6, roughness: 0.15 });
     for (const wx of [-w * 0.28, w * 0.28]) {
       const win = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.3, 0.22), winMat);
       win.position.set(wx, h * 0.62, d / 2 + 0.05);
@@ -402,11 +398,10 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
       hGroup.add(roof, stack);
     } else {
       const roof = new THREE.Mesh(
-        new THREE.ConeGeometry(Math.max(w, d) * 0.76, 3.6, 4),
+        new THREE.BoxGeometry(w + 0.5, 0.7, d + 0.5),
         new THREE.MeshStandardMaterial({ color: roofHex, roughness: 0.62 })
       );
-      roof.rotation.y = Math.PI / 4;
-      roof.position.y = h + 1.8;
+      roof.position.y = h + 0.35;
       roof.castShadow = true;
       hGroup.add(roof);
     }
