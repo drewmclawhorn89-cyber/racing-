@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { soundEngine } from './audio';
 import {
   ISLAND_RADIUS,
@@ -145,6 +150,7 @@ const BOT_NAMES = [
 export class BattleRoyaleEngine {
   private canvas: HTMLCanvasElement;
   private renderer: THREE.WebGLRenderer;
+  private composer: EffectComposer | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private pmrem: THREE.PMREMGenerator;
@@ -279,7 +285,7 @@ export class BattleRoyaleEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 0.95;
 
     // Software GL check
     try {
@@ -297,7 +303,7 @@ export class BattleRoyaleEngine {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#f2b27a');
-    this.scene.fog = new THREE.Fog('#e9a874', 120, 560);
+    this.scene.fog = new THREE.FogExp2('#e3b087', 0.0016);
 
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -312,7 +318,9 @@ export class BattleRoyaleEngine {
     sun.position.set(240, 120, 160);
     if (!this.isSoftwareGl) {
       sun.castShadow = true;
-      sun.shadow.mapSize.set(1024, 1024);
+      sun.shadow.mapSize.set(2048, 2048);
+      sun.shadow.bias = -0.0004;
+      sun.shadow.normalBias = 0.6;
       sun.shadow.camera.near = 20;
       sun.shadow.camera.far = 700;
       sun.shadow.camera.left = -220;
@@ -322,6 +330,7 @@ export class BattleRoyaleEngine {
     }
     this.scene.add(sun);
 
+    if (!this.isSoftwareGl) this.setupPostFx();
     this.setupShowcaseScene();
     this.bindEvents();
     this.resize();
@@ -329,6 +338,33 @@ export class BattleRoyaleEngine {
 
     this.lastTime = performance.now();
     this.loop(this.lastTime);
+  }
+
+  /** Cinematic post stack: bloom, warm grade + film grain + vignette, then tone-map. */
+  private setupPostFx() {
+    const size = this.renderer.getSize(new THREE.Vector2());
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new UnrealBloomPass(size, 0.35, 0.7, 0.88));
+    this.composer.addPass(new ShaderPass({
+      uniforms: { tDiffuse: { value: null }, time: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform float time; varying vec2 vUv;
+        float rnd(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))+time)*43758.5453); }
+        void main(){
+          vec2 d = vUv - 0.5;
+          float ca = dot(d,d) * 0.006;
+          vec3 c = vec3(texture2D(tDiffuse, vUv+d*ca).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv-d*ca).b);
+          float l = dot(c, vec3(0.299,0.587,0.114));
+          c = mix(vec3(l), c, 0.88);                       // slight desaturation
+          c = mix(c * vec3(0.96,0.99,1.06), c * vec3(1.08,1.0,0.92), smoothstep(0.2,0.8,l)); // teal shadows / warm highlights
+          c = (c - 0.5) * 1.08 + 0.5;
+          c *= 1.0 - dot(d,d) * 1.1;                       // vignette
+          c += (rnd(vUv*1000.0) - 0.5) * 0.035;            // film grain
+          gl_FragColor = vec4(c, 1.0);
+        }`
+    }));
+    this.composer.addPass(new OutputPass());
   }
 
   private setupShowcaseScene() {
@@ -1316,7 +1352,13 @@ export class BattleRoyaleEngine {
       this.updateMatch(dt);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) {
+      const grade = (this.composer.passes[2] as ShaderPass).uniforms;
+      grade.time.value = (this.elapsed % 10);
+      this.composer.render(dt);
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
     if (this.isSoftwareGl) {
       const afterDraw = (window as unknown as { __AFTER_DRAW__?: () => void }).__AFTER_DRAW__;
       if (typeof afterDraw === 'function') afterDraw();
@@ -1920,6 +1962,7 @@ export class BattleRoyaleEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
+    this.composer?.setSize(w, h);
   }
 
   private handleKeyDown = (e: KeyboardEvent) => {
