@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import {
   getCosmetic,
   SKIN_TONES,
@@ -38,6 +40,92 @@ export interface CharacterRig {
   muzzlePoint: THREE.Object3D;
   nameSprite?: THREE.Sprite;
   activeEmote: EmoteId | null;
+  realModel?: THREE.Object3D;
+  mixer?: THREE.AnimationMixer;
+  actions?: Record<string, THREE.AnimationAction>;
+  currentAction?: string;
+  lastTime?: number;
+}
+
+// ---- Real (realistic human) character models ----
+const REAL_MODELS = ['Soldier', 'Michelle'];
+const modelCache: Record<string, Promise<{ scene: THREE.Object3D; clips: THREE.AnimationClip[] }>> = {};
+function loadRealModel(name: string) {
+  if (!modelCache[name]) {
+    const url = `${import.meta.env.BASE_URL}models/${name}.glb`;
+    modelCache[name] = new GLTFLoader().loadAsync(url).then((g) => ({ scene: g.scene, clips: g.animations }));
+  }
+  return modelCache[name];
+}
+
+function pickModelName(loadout: PlayerLoadout): string {
+  const str = JSON.stringify(loadout);
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return REAL_MODELS[h % REAL_MODELS.length];
+}
+
+function attachRealModel(rig: CharacterRig, loadout: PlayerLoadout) {
+  const name = pickModelName(loadout);
+  loadRealModel(name)
+    .then(({ scene, clips }) => {
+      const model = cloneSkinned(scene);
+      // Normalize height to ~1.8m, feet on the ground
+      const box = new THREE.Box3().setFromObject(model);
+      const h = box.max.y - box.min.y || 1;
+      const k = 1.8 / h;
+      model.scale.multiplyScalar(k);
+      model.position.y = -box.min.y * k - 0.92; // hips group sits at y=0.92
+      model.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.castShadow = true;
+          m.frustumCulled = false;
+        }
+      });
+      // Hide the blocky cartoon body, keep held items + glider
+      const keep = new Set<THREE.Object3D>([rig.heldTool, rig.heldGun, rig.glider]);
+      const isKept = (o: THREE.Object3D) => {
+        let p: THREE.Object3D | null = o;
+        while (p) {
+          if (keep.has(p)) return true;
+          p = p.parent;
+        }
+        return false;
+      };
+      rig.hips.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh && !isKept(o)) o.visible = false;
+      });
+      rig.hips.add(model);
+      rig.realModel = model;
+      rig.mixer = new THREE.AnimationMixer(model);
+      rig.actions = {};
+      for (const c of clips) rig.actions[c.name] = rig.mixer.clipAction(c);
+      rig.currentAction = undefined;
+    })
+    .catch((e) => console.warn('Failed to load realistic model', e));
+}
+
+function playRealAnim(rig: CharacterRig, state: CharacterAnimState, time: number) {
+  if (!rig.mixer || !rig.actions) return;
+  const dt = rig.lastTime === undefined ? 0 : Math.min(0.1, Math.max(0, time - rig.lastTime));
+  rig.lastTime = time;
+  let want = 'Idle';
+  let speed = 1;
+  if (state === 'run') want = 'Run';
+  else if (state === 'sprint') { want = 'Run'; speed = 1.3; }
+  else if (state === 'jump' || state === 'slide' || state === 'crouch') want = 'Run';
+  else if (state === 'emote_dance') want = rig.actions['SambaDance'] ? 'SambaDance' : 'Idle';
+  if (!rig.actions[want]) want = Object.keys(rig.actions).find((n) => /idle/i.test(n)) || Object.keys(rig.actions)[0];
+  if (want !== rig.currentAction) {
+    const next = rig.actions[want];
+    const prev = rig.currentAction ? rig.actions[rig.currentAction] : undefined;
+    next.reset().play();
+    if (prev) prev.crossFadeTo(next, 0.2, false);
+    rig.currentAction = want;
+  }
+  rig.actions[want].timeScale = speed;
+  rig.mixer.update(dt);
 }
 
 function matStreet(color: string | number, roughness = 0.8, metalness = 0.08): THREE.MeshStandardMaterial {
@@ -443,7 +531,7 @@ export function createStreetCharacter(loadout: PlayerLoadout, weaponId: WeaponId
   glider.visible = false;
   root.add(glider);
 
-  return {
+  const rigOut: CharacterRig = {
     root,
     hips,
     torso,
@@ -458,6 +546,8 @@ export function createStreetCharacter(loadout: PlayerLoadout, weaponId: WeaponId
     muzzlePoint,
     activeEmote: null
   };
+  attachRealModel(rigOut, loadout);
+  return rigOut;
 }
 
 export function setRigWeapon(rig: CharacterRig, weaponId: WeaponId) {
@@ -575,6 +665,12 @@ export function animateCharacterPose(
       rig.leftArm.rotation.x = -0.85;
       rig.leftArm.rotation.z = -0.3;
     }
+  }
+
+  playRealAnim(rig, state, time);
+  if (rig.realModel) {
+    // Hide the procedural limb motion's influence on the real model: only whole-body pose applies
+    rig.torso.rotation.set(0, 0, 0);
   }
 
   // Pickaxe / Attack swing overlay
