@@ -15,7 +15,7 @@ import {
 } from './catalog';
 import {
   animateCharacterPose,
-  createCartoonCharacter,
+  createStreetCharacter,
   setRigWeapon,
   type CharacterAnimState,
   type CharacterRig
@@ -279,7 +279,7 @@ export class BattleRoyaleEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.0;
 
     // Software GL check
     try {
@@ -296,20 +296,20 @@ export class BattleRoyaleEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#63c5ff');
-    this.scene.fog = new THREE.Fog('#8bd8ff', 220, 680);
+    this.scene.background = new THREE.Color('#f2b27a');
+    this.scene.fog = new THREE.Fog('#e9a874', 120, 560);
 
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
     this.camera = new THREE.PerspectiveCamera(62, 16 / 9, 0.25, 1300);
 
-    // Bright daytime cartoon lighting
-    const hemi = new THREE.HemisphereLight('#cff2ff', '#4fa955', 0.95);
+    // Golden-hour hazy city lighting
+    const hemi = new THREE.HemisphereLight('#ffd2a1', '#5a4a40', 0.8);
     this.scene.add(hemi);
 
-    const sun = new THREE.DirectionalLight('#fff8dc', 1.65);
-    sun.position.set(160, 260, 140);
+    const sun = new THREE.DirectionalLight('#ffb36b', 2.1);
+    sun.position.set(240, 120, 160);
     if (!this.isSoftwareGl) {
       sun.castShadow = true;
       sun.shadow.mapSize.set(1024, 1024);
@@ -336,22 +336,22 @@ export class BattleRoyaleEngine {
     // Island lobby pedestal
     const island = new THREE.Mesh(
       new THREE.CylinderGeometry(4.2, 4.8, 1.2, 24),
-      new THREE.MeshStandardMaterial({ color: '#56c257', roughness: 0.85 })
+      new THREE.MeshStandardMaterial({ color: '#4a4f55', roughness: 0.9 })
     );
     island.position.y = -0.6;
     island.receiveShadow = true;
     const rim = new THREE.Mesh(
       new THREE.CylinderGeometry(4.4, 4.4, 0.24, 24),
-      new THREE.MeshStandardMaterial({ color: '#facc15', roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: '#e8b923', roughness: 0.4 })
     );
     rim.position.y = -0.1;
     const sky = new THREE.Mesh(
       new THREE.SphereGeometry(120, 16, 12),
-      new THREE.MeshBasicMaterial({ color: '#45b7ff', side: THREE.BackSide })
+      new THREE.MeshBasicMaterial({ color: '#f2b27a', side: THREE.BackSide })
     );
     this.showcaseGroup.add(island, rim, sky);
 
-    this.showcaseRig = createCartoonCharacter(this.playerLoadout, 'pickaxe');
+    this.showcaseRig = createStreetCharacter(this.playerLoadout, 'pickaxe');
     this.showcaseRig.root.position.set(0, 0, 0);
     this.showcaseGroup.add(this.showcaseRig.root);
 
@@ -365,7 +365,7 @@ export class BattleRoyaleEngine {
     if (this.showcaseRig) {
       this.showcaseGroup.remove(this.showcaseRig.root);
     }
-    this.showcaseRig = createCartoonCharacter(this.playerLoadout, 'pickaxe');
+    this.showcaseRig = createStreetCharacter(this.playerLoadout, 'pickaxe');
     this.showcaseRig.root.position.set(0, 0, 0);
     this.showcaseGroup.add(this.showcaseRig.root);
 
@@ -374,7 +374,7 @@ export class BattleRoyaleEngine {
     }
     this.showcaseTeammates = [];
     partyLoadouts.slice(0, 3).forEach((pl, idx) => {
-      const mate = createCartoonCharacter(pl, 'rifle');
+      const mate = createStreetCharacter(pl, 'rifle');
       const offsetX = idx === 0 ? -1.8 : idx === 1 ? 1.8 : -3.2;
       const offsetZ = idx === 2 ? -1.1 : -0.7;
       mate.root.position.set(offsetX, 0, offsetZ);
@@ -417,7 +417,7 @@ export class BattleRoyaleEngine {
     this.world = buildIslandWorld(isCreative);
     this.scene.add(this.world.group);
 
-    this.playerRig = createCartoonCharacter(this.playerLoadout, isCreative ? 'rifle' : 'pickaxe');
+    this.playerRig = createStreetCharacter(this.playerLoadout, isCreative ? 'rifle' : 'pickaxe');
     this.scene.add(this.playerRig.root);
 
     // Player Initial Stats
@@ -510,7 +510,7 @@ export class BattleRoyaleEngine {
           glider: 'glider_sunburst'
         };
         const botWeapon: WeaponId = (['pistol', 'rifle', 'shotgun', 'smg'] as WeaponId[])[i % 4];
-        const rig = createCartoonCharacter(botLoadout, botWeapon);
+        const rig = createStreetCharacter(botLoadout, botWeapon);
         rig.root.position.set(bx, Math.max(0.2, by), bz);
         // Only render nearest ~28 bots actively for ultra-smooth 60 FPS; rest update lightweight AI until close!
         rig.root.visible = false;
@@ -598,7 +598,7 @@ export class BattleRoyaleEngine {
         if (!cid) return;
         let peer = this.remotePeers.get(cid);
         if (!peer) {
-          const rig = createCartoonCharacter((p.loadout as PlayerLoadout) || this.playerLoadout, (p.weapon as WeaponId) || 'rifle');
+          const rig = createStreetCharacter((p.loadout as PlayerLoadout) || this.playerLoadout, (p.weapon as WeaponId) || 'rifle');
           this.scene.add(rig.root);
           peer = {
             clientId: cid,
@@ -1404,6 +1404,7 @@ export class BattleRoyaleEngine {
       if (this.busProgress < 1.3) {
         this.busProgress += dt * 0.042;
         this.world.skyBus.position.set(-320 + this.busProgress * 640, 120, -240 + this.busProgress * 480);
+      this.world.skyBus.children.forEach((c) => { if (c.userData.spin) c.rotation.y += 0.6; });
       } else {
         this.world.skyBus.visible = false;
       }

@@ -122,7 +122,7 @@ export const MatchHud: React.FC<MatchHudProps> = ({
           <div className="flex items-center gap-1.5 bg-slate-950/90 border border-slate-700 rounded-lg px-3 py-1.5">
             <Skull className="w-4 h-4 text-amber-400" />
             <span className="tabular font-bold text-sm">{hud.kills}</span>
-            <span className="text-[11px] text-slate-400 uppercase">Elims</span>
+            <span className="text-[11px] text-slate-400 uppercase">Kills</span>
           </div>
           <button
             onClick={onToggleMute}
@@ -174,26 +174,26 @@ export const MatchHud: React.FC<MatchHudProps> = ({
         </div>
       )}
 
-      {/* Sky-Bus / Glider / Downed / Interact Banner */}
+      {/* Chopper / Glider / Downed / Interact Banner */}
       <div className="absolute top-16 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none">
         {hud.inBus && (
           <div className="bg-slate-950/90 border-2 border-amber-400 rounded-xl px-4 py-2 text-center shadow-lg">
             <p className="font-display font-bold text-amber-300 uppercase tracking-wider text-sm">
-              Aboard the Sky-Bus
+              Aboard the Chopper
             </p>
             <p className="text-xs text-slate-200">
-              {isMobile ? 'Tap JUMP to drop onto the island!' : 'Press SPACE to drop & choose your landing zone!'}
+              {isMobile ? 'Tap JUMP to drop into the city!' : 'Press SPACE to bail out over the city!'}
             </p>
           </div>
         )}
         {hud.skydiving && (
           <div className="bg-slate-950/90 border border-sky-400 rounded-lg px-3 py-1.5 text-xs font-bold text-sky-200">
-            {hud.gliding ? 'Glider Open — Steer to land' : 'Skydiving — Press SPACE to deploy Glider'}
+            {hud.gliding ? 'Parachute Open — Steer to land' : 'Skydiving — Press SPACE to open Parachute'}
           </div>
         )}
         {hud.downed && (
           <div className="bg-rose-950/95 border-2 border-rose-500 rounded-xl px-4 py-2 text-center">
-            <p className="text-xs font-bold uppercase text-rose-200">Knocked Down! Crawl to cover</p>
+            <p className="text-xs font-bold uppercase text-rose-200">Critical! Crawl to cover</p>
             {hud.revivingProgress > 0 && (
               <div className="mt-1 w-40 h-2 bg-slate-800 rounded-full overflow-hidden">
                 <div
@@ -420,10 +420,10 @@ export const MatchHud: React.FC<MatchHudProps> = ({
               )}
             </div>
             <p className="text-xs font-bold uppercase tracking-widest text-amber-300">
-              {hud.result.won ? '#1 Victory Crown' : `Placed #${hud.result.placement} / ${hud.result.totalPlayers}`}
+              {hud.result.won ? 'Respect +' : `Placed #${hud.result.placement} / ${hud.result.totalPlayers}`}
             </p>
-            <h2 className="font-display text-3xl font-black uppercase tracking-tight text-white mt-1">
-              {hud.result.won ? 'Island Champion!' : 'Match Complete'}
+            <h2 className={`gta-title ${hud.result.won ? 'gta-passed' : 'gta-wasted'} mt-1`}>
+              {hud.result.won ? 'MISSION PASSED' : 'WASTED'}
             </h2>
             {!hud.result.won && (
               <p className="text-xs text-slate-400 mt-1">Eliminated by {hud.result.winnerName}</p>

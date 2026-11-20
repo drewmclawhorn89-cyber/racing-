@@ -40,7 +40,7 @@ export interface CharacterRig {
   activeEmote: EmoteId | null;
 }
 
-function matCartoon(color: string | number, roughness = 0.62, metalness = 0.08): THREE.MeshStandardMaterial {
+function matStreet(color: string | number, roughness = 0.8, metalness = 0.08): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color,
     roughness,
@@ -51,9 +51,9 @@ function matCartoon(color: string | number, roughness = 0.62, metalness = 0.08):
 function buildHairMesh(hairId: string): THREE.Group {
   const cos = getCosmetic(hairId);
   const g = new THREE.Group();
-  const mainMat = matCartoon(cos.primaryColor, 0.58);
-  const subMat = matCartoon(cos.secondaryColor, 0.55);
-  const accMat = matCartoon(cos.accentColor, 0.4, 0.25);
+  const mainMat = matStreet(cos.primaryColor, 0.58);
+  const subMat = matStreet(cos.secondaryColor, 0.55);
+  const accMat = matStreet(cos.accentColor, 0.4, 0.25);
 
   if (hairId === 'hair_visor') {
     const dome = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 14), mainMat);
@@ -146,9 +146,9 @@ function buildHairMesh(hairId: string): THREE.Group {
 function buildBackpackMesh(packId: string): THREE.Group {
   const cos = getCosmetic(packId);
   const g = new THREE.Group();
-  const mainMat = matCartoon(cos.primaryColor, 0.55);
-  const subMat = matCartoon(cos.secondaryColor, 0.5);
-  const accMat = matCartoon(cos.accentColor, 0.4, 0.2);
+  const mainMat = matStreet(cos.primaryColor, 0.55);
+  const subMat = matStreet(cos.secondaryColor, 0.5);
+  const accMat = matStreet(cos.accentColor, 0.4, 0.2);
 
   if (packId === 'pack_jet') {
     const tankL = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.44, 10), mainMat);
@@ -195,12 +195,12 @@ function buildBackpackMesh(packId: string): THREE.Group {
 function buildPickaxeMesh(pickId: string): THREE.Group {
   const cos = getCosmetic(pickId);
   const g = new THREE.Group();
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.85, 8), matCartoon(cos.primaryColor, 0.6));
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.85, 8), matStreet(cos.primaryColor, 0.6));
   handle.position.y = 0.35;
   g.add(handle);
 
-  const headMat = matCartoon(cos.secondaryColor, 0.4, 0.35);
-  const tipMat = matCartoon(cos.accentColor, 0.3, 0.4);
+  const headMat = matStreet(cos.secondaryColor, 0.4, 0.35);
+  const tipMat = matStreet(cos.accentColor, 0.3, 0.4);
   if (pickId === 'pick_starwand') {
     const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.18, 0), tipMat);
     star.position.y = 0.82;
@@ -222,9 +222,9 @@ function buildPickaxeMesh(pickId: string): THREE.Group {
 function buildGliderMesh(gliderId: string): THREE.Group {
   const cos = getCosmetic(gliderId);
   const g = new THREE.Group();
-  const mainMat = matCartoon(cos.primaryColor, 0.45, 0.15);
-  const subMat = matCartoon(cos.secondaryColor, 0.5, 0.1);
-  const accMat = matCartoon(cos.accentColor, 0.35, 0.25);
+  const mainMat = matStreet(cos.primaryColor, 0.45, 0.15);
+  const subMat = matStreet(cos.secondaryColor, 0.5, 0.1);
+  const accMat = matStreet(cos.accentColor, 0.35, 0.25);
 
   if (gliderId === 'glider_parasol') {
     const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.15, 0.42, 12), mainMat);
@@ -271,31 +271,31 @@ function buildGliderMesh(gliderId: string): THREE.Group {
 
 export function buildWeaponMesh(weaponId: WeaponId): THREE.Group {
   const g = new THREE.Group();
-  const darkMat = matCartoon('#1e293b', 0.45, 0.4);
+  const darkMat = matStreet('#1e293b', 0.45, 0.4);
   if (weaponId === 'pistol') {
-    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.32), matCartoon('#cbd5e1', 0.35, 0.5));
+    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.32), matStreet('#cbd5e1', 0.35, 0.5));
     const grip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.18, 0.1), darkMat);
     grip.position.set(0, -0.12, -0.08);
     g.add(slide, grip);
   } else if (weaponId === 'shotgun') {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.64), matCartoon('#15803d', 0.5, 0.2));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.64), matStreet('#15803d', 0.5, 0.2));
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.62, 8), darkMat);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.04, 0.2);
     g.add(body, barrel);
   } else if (weaponId === 'smg') {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.15, 0.48), matCartoon('#22c55e', 0.45, 0.25));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.15, 0.48), matStreet('#22c55e', 0.45, 0.25));
     const mag = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.22, 0.08), darkMat);
     mag.position.set(0, -0.16, 0.08);
     g.add(body, mag);
   } else if (weaponId === 'sniper') {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.14, 0.92), matCartoon('#7e22ce', 0.45, 0.25));
-    const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.34, 8), matCartoon('#38bdf8', 0.3, 0.5));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.14, 0.92), matStreet('#7e22ce', 0.45, 0.25));
+    const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.34, 8), matStreet('#38bdf8', 0.3, 0.5));
     scope.rotation.x = Math.PI / 2;
     scope.position.set(0, 0.12, 0.05);
     g.add(body, scope);
   } else if (weaponId === 'rifle') {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.14, 0.72), matCartoon('#0284c7', 0.45, 0.3));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.14, 0.72), matStreet('#0284c7', 0.45, 0.3));
     const mag = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.18, 0.09), darkMat);
     mag.position.set(0, -0.14, 0.08);
     mag.rotation.x = 0.2;
@@ -303,23 +303,23 @@ export function buildWeaponMesh(weaponId: WeaponId): THREE.Group {
   } else {
     // Heal / shield item cube
     const col = weaponId === 'medkit' ? '#ef4444' : weaponId === 'bandage' ? '#f8fafc' : '#38bdf8';
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.22), matCartoon(col, 0.35, 0.1));
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.22), matStreet(col, 0.35, 0.1));
     g.add(box);
   }
   return g;
 }
 
-export function createCartoonCharacter(loadout: PlayerLoadout, weaponId: WeaponId = 'pickaxe'): CharacterRig {
+export function createStreetCharacter(loadout: PlayerLoadout, weaponId: WeaponId = 'pickaxe'): CharacterRig {
   const skinInfo = SKIN_TONES.find((s) => s.id === loadout.skinTone) || SKIN_TONES[0];
   const outfit = getCosmetic(loadout.skin);
 
-  const skinMat = matCartoon(skinInfo.hex, 0.68, 0.02);
-  const outfitMat = matCartoon(outfit.primaryColor, 0.58, 0.08);
-  const pantsMat = matCartoon(outfit.secondaryColor, 0.65, 0.05);
-  const accentMat = matCartoon(outfit.accentColor, 0.42, 0.2);
-  const shoeMat = matCartoon('#ffffff', 0.5, 0.1);
-  const eyeWhiteMat = matCartoon('#ffffff', 0.3);
-  const pupilMat = matCartoon('#0f172a', 0.2);
+  const skinMat = matStreet(skinInfo.hex, 0.68, 0.02);
+  const outfitMat = matStreet(outfit.primaryColor, 0.58, 0.08);
+  const pantsMat = matStreet(outfit.secondaryColor, 0.65, 0.05);
+  const accentMat = matStreet(outfit.accentColor, 0.42, 0.2);
+  const shoeMat = matStreet('#1a1a1c', 0.7, 0.1);
+  const eyeWhiteMat = matStreet('#ffffff', 0.3);
+  const pupilMat = matStreet('#0f172a', 0.2);
 
   const root = new THREE.Group();
   const hips = new THREE.Group();
@@ -353,30 +353,25 @@ export function createCartoonCharacter(loadout: PlayerLoadout, weaponId: WeaponI
   head.position.y = 0.8;
   torso.add(head);
 
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.36, 18, 16), skinMat);
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.33, 18, 16), skinMat);
   skull.position.y = 0.28;
   skull.scale.set(1.06, 1.0, 1.02);
   skull.castShadow = true;
   head.add(skull);
 
-  // Expressive Cartoon Eyes
+  // Sunglasses & stern mouth (street look)
+  const shadeMat = new THREE.MeshStandardMaterial({ color: '#0a0a0c', roughness: 0.15, metalness: 0.7 });
   for (const side of [-1, 1]) {
-    const eyeW = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), eyeWhiteMat);
-    eyeW.scale.set(0.95, 1.2, 0.55);
-    eyeW.position.set(side * 0.13, 0.29, 0.33);
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.044, 8, 8), pupilMat);
-    pupil.position.set(side * 0.13, 0.29, 0.365);
-    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.028, 0.03), matCartoon('#1e293b', 0.6));
-    brow.position.set(side * 0.13, 0.4, 0.34);
-    brow.rotation.z = side * -0.1;
-    head.add(eyeW, pupil, brow);
+    const lens = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.1, 0.05), shadeMat);
+    lens.position.set(side * 0.13, 0.3, 0.35);
+    head.add(lens);
   }
-
-  // Cheerful cartoon smile
-  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.018, 6, 12, Math.PI), matCartoon('#991b1b', 0.5));
-  smile.rotation.z = Math.PI;
-  smile.position.set(0, 0.18, 0.345);
-  head.add(smile);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.025, 0.04), shadeMat);
+  bridge.position.set(0, 0.31, 0.35);
+  head.add(bridge);
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.022, 0.03), matStreet('#4a1f1f', 0.6));
+  mouth.position.set(0, 0.17, 0.35);
+  head.add(mouth);
 
   // Hair / Helmet
   const hair = buildHairMesh(loadout.hair);
