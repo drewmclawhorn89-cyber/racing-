@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { detailTexture, detailBump, facadeTexture, facadeEmissive, skyTexture } from './textures';
 import { ISLAND_RADIUS, ISLAND_ZONES, type MaterialType, type WeaponId } from './catalog';
 
 export interface HarvestableProp {
@@ -210,7 +211,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
 
   // 1. Bright Daytime Sky Dome
   const skyGeo = new THREE.SphereGeometry(980, 24, 16);
-  const skyMat = new THREE.MeshBasicMaterial({ color: '#f0a56d', side: THREE.BackSide });
+  const skyMat = new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false });
   const skyDome = new THREE.Mesh(skyGeo, skyMat);
   group.add(skyDome);
 
@@ -232,7 +233,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
   // 2. Ocean Water Plane & Crystal Basin Lake Water
   const ocean = new THREE.Mesh(
     new THREE.CircleGeometry(960, 48),
-    new THREE.MeshStandardMaterial({ color: '#1f5a73', roughness: 0.18, metalness: 0.3 })
+    new THREE.MeshStandardMaterial({ color: '#1b4f66', roughness: 0.06, metalness: 0.55, envMapIntensity: 1.6 })
   );
   ocean.rotation.x = -Math.PI / 2;
   ocean.position.y = -2.2;
@@ -252,7 +253,10 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
   lakeWater.position.set(-175, -0.4, 95);
   group.add(lakeWater);
 
-  // 3. Vertex-Colored Urban Terrain Mesh
+  // 3. Vertex-Colored Urban Terrain Mesh (with tiled detail grain)
+  const terrainDetail = detailTexture().clone();
+  terrainDetail.repeat.set(70, 70); terrainDetail.needsUpdate = true;
+  detailBump().repeat.set(70, 70);
   const segs = 112;
   const span = 880;
   const terrainGeo = new THREE.PlaneGeometry(span, span, segs, segs);
@@ -275,7 +279,7 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
 
   const terrainMesh = new THREE.Mesh(
     terrainGeo,
-    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.04 })
+    new THREE.MeshStandardMaterial({ vertexColors: true, map: terrainDetail, bumpMap: detailBump(), bumpScale: 1.6, roughness: 0.92, metalness: 0 })
   );
   terrainMesh.receiveShadow = true;
   group.add(terrainMesh);
@@ -357,12 +361,19 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
     });
   };
 
+  const wallMat = (hex: string, w: number, h: number, d: number) => {
+    const m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.82, metalness: 0.02, map: facadeTexture().clone(), emissiveMap: facadeEmissive().clone(), emissive: new THREE.Color('#ffb060'), emissiveIntensity: 0.55 });
+    const rx = Math.max(1, Math.round(Math.max(w, d) / 6)), ry = Math.max(1, Math.round(h / 4));
+    for (const t of [m.map!, m.emissiveMap!]) { t.repeat.set(rx, ry); t.needsUpdate = true; }
+    return m;
+  };
+
   const addHouse = (id: string, x: number, z: number, w: number, h: number, d: number, wallHex: string, roofHex: string, isFactory = false) => {
     const y = groundHeightAt(x, z);
     const hGroup = new THREE.Group();
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(w, h, d),
-      new THREE.MeshStandardMaterial({ color: wallHex, roughness: 0.92 })
+      wallMat(wallHex, w, h, d)
     );
     body.position.y = h / 2;
     body.castShadow = true;
@@ -429,16 +440,16 @@ export function buildIslandWorld(isCreative: boolean): IslandWorld {
     const cGroup = new THREE.Group();
     const chassis = new THREE.Mesh(
       new THREE.BoxGeometry(2.3, 0.9, 4.4),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.25 })
+      new THREE.MeshPhysicalMaterial({ color, roughness: 0.28, metalness: 0.6, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 1.4 })
     );
     chassis.position.y = 0.7;
     chassis.castShadow = true;
     const cabin = new THREE.Mesh(
       new THREE.BoxGeometry(1.95, 0.85, 2.2),
-      new THREE.MeshStandardMaterial({ color: '#bae6fd', roughness: 0.2 })
+      new THREE.MeshPhysicalMaterial({ color: '#0d1822', roughness: 0.04, metalness: 0.9, envMapIntensity: 2 })
     );
     cabin.position.set(0, 1.5, -0.2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.8 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: '#111214', roughness: 0.95 });
     for (const [wx, wz] of [[-1.15, 1.35], [1.15, 1.35], [-1.15, -1.35], [1.15, -1.35]]) {
       const w = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.32, 10), wheelMat);
       w.rotation.z = Math.PI / 2;
