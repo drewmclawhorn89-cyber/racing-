@@ -1,6 +1,6 @@
 {
   "name": "Apex Rush Racing",
-  "description": "SkyDrop City — Gritty open-world 3D crime-city Battle Royale with 100-player Solo/Duo/Squad, Zero Build & Creative modes, 7 island zones, building, Battle Pass, Shop, Locker, and Google cloud sync.",
-  "requestFramePermissions": ["microphone"],
+  "description": "Photographic 4K street and circuit racing game with 8 customizable cars, 4 tracks, AI and online multiplayer, Time Trial ghost replays, Photo Mode, and Google cloud sync.",
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -30,7 +30,6 @@ service cloud.firestore {
       return isVerifiedSignedIn() && request.auth.uid == userId;
     }
 
-    // ===== Preserved Racing Helpers =====
     function isValidTrackId(t) {
       return t is string && t.size() >= 1 && t.size() <= 16 && t in ['city', 'desert', 'mountain', 'coastal'];
     }
@@ -152,101 +151,6 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    // ===== Battle Royale Helpers =====
-    function isValidBrMode(m) {
-      return m is string && m in ['solo', 'duo', 'squad', 'zerobuild', 'creative'];
-    }
-
-    function isValidItemType(t) {
-      return t is string && t in ['skin', 'hair', 'backpack', 'pickaxe', 'glider', 'emote'];
-    }
-
-    function isValidFriendStatus(s) {
-      return s is string && s in ['pending', 'accepted', 'blocked'];
-    }
-
-    function isValidPlayer(data) {
-      return data.keys().hasAll([
-          'ownerId', 'username', 'avatar', 'level', 'xp', 'wins', 'kills', 'coins',
-          'matchesPlayed', 'battlePassTier', 'battlePassPremium', 'loadout', 'quests',
-          'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'ownerId', 'username', 'avatar', 'level', 'xp', 'wins', 'kills', 'coins',
-          'matchesPlayed', 'battlePassTier', 'battlePassPremium', 'loadout', 'quests',
-          'createdAt', 'updatedAt'
-        ])
-        && data.ownerId is string
-        && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
-        && data.username is string && data.username.size() >= 1 && data.username.size() <= 24
-        && data.avatar is string && data.avatar.size() <= 400
-        && data.level is number && data.level >= 1 && data.level <= 1000
-        && data.xp is number && data.xp >= 0 && data.xp <= 100000000
-        && data.wins is number && data.wins >= 0 && data.wins <= 1000000
-        && data.kills is number && data.kills >= 0 && data.kills <= 10000000
-        && data.coins is number && data.coins >= 0 && data.coins <= 100000000
-        && data.matchesPlayed is number && data.matchesPlayed >= 0 && data.matchesPlayed <= 1000000
-        && data.battlePassTier is number && data.battlePassTier >= 1 && data.battlePassTier <= 100
-        && data.battlePassPremium is bool
-        && data.loadout is map && data.loadout.keys().size() <= 8
-        && data.quests is map && data.quests.keys().size() <= 10
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidMatch(data) {
-      return data.keys().hasAll([
-          'match_id', 'mode', 'players', 'winner', 'started_at', 'ended_at',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'match_id', 'mode', 'players', 'winner', 'started_at', 'ended_at',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.match_id is string && isValidId(data.match_id) && data.match_id.size() <= 64
-        && isValidBrMode(data.mode)
-        && data.players is list && data.players.size() >= 1 && data.players.size() <= 100
-        && data.players[0] is string && data.players[0].size() <= 48
-        && data.winner is string && data.winner.size() >= 1 && data.winner.size() <= 48
-        && data.started_at is string && data.started_at.size() >= 1 && data.started_at.size() <= 48
-        && data.ended_at is string && data.ended_at.size() >= 1 && data.ended_at.size() <= 48
-        && data.createdBy is string && isValidId(data.createdBy) && data.createdBy == request.auth.uid
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidInventoryItem(data) {
-      return data.keys().hasAll([
-          'player_id', 'item_id', 'item_type', 'equipped', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'player_id', 'item_id', 'item_type', 'equipped', 'createdAt', 'updatedAt'
-        ])
-        && data.player_id is string && isValidId(data.player_id) && data.player_id == request.auth.uid
-        && data.item_id is string && isValidId(data.item_id) && data.item_id.size() <= 48
-        && isValidItemType(data.item_type)
-        && data.equipped is bool
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidFriendLink(data) {
-      return data.keys().hasAll([
-          'player_id', 'friend_id', 'friend_name', 'status', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'player_id', 'friend_id', 'friend_name', 'status', 'createdAt', 'updatedAt'
-        ])
-        && data.player_id is string && isValidId(data.player_id)
-        && data.friend_id is string && isValidId(data.friend_id)
-        && data.friend_name is string && data.friend_name.size() >= 1 && data.friend_name.size() <= 24
-        && isValidFriendStatus(data.status)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // ===== Preserved Racing Collections =====
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
       allow list: if false;
@@ -321,97 +225,6 @@ service cloud.firestore {
       allow delete: if isValidId(recordId)
         && isVerifiedSignedIn()
         && existing().userId == request.auth.uid;
-    }
-
-    // ===== Battle Royale Collections =====
-    match /players/{playerId} {
-      allow get: if isValidId(playerId) && isVerifiedSignedIn();
-      allow list: if isVerifiedSignedIn() && resource.data.level >= 1;
-      allow create: if isValidId(playerId)
-        && isOwner(playerId)
-        && isValidPlayer(incoming())
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isValidId(playerId)
-        && isOwner(playerId)
-        && isValidPlayer(incoming())
-        && incoming().ownerId == existing().ownerId
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly([
-          'username', 'avatar', 'level', 'xp', 'wins', 'kills', 'coins',
-          'matchesPlayed', 'battlePassTier', 'battlePassPremium', 'loadout', 'quests',
-          'updatedAt'
-        ]);
-      allow delete: if false;
-    }
-
-    match /matches/{matchId} {
-      allow get: if isValidId(matchId) && isVerifiedSignedIn();
-      allow list: if isVerifiedSignedIn() && resource.data.players.size() >= 1;
-      allow create: if isValidId(matchId)
-        && isVerifiedSignedIn()
-        && isValidMatch(incoming())
-        && incoming().match_id == matchId
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if false;
-      allow delete: if false;
-    }
-
-    match /inventory/{entryId} {
-      allow get: if isValidId(entryId) && isVerifiedSignedIn() && resource.data.player_id == request.auth.uid;
-      allow list: if isVerifiedSignedIn() && resource.data.player_id == request.auth.uid;
-      allow create: if isValidId(entryId)
-        && isVerifiedSignedIn()
-        && isValidInventoryItem(incoming())
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isValidId(entryId)
-        && isVerifiedSignedIn()
-        && existing().player_id == request.auth.uid
-        && isValidInventoryItem(incoming())
-        && incoming().player_id == existing().player_id
-        && incoming().item_id == existing().item_id
-        && incoming().item_type == existing().item_type
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['equipped', 'updatedAt']);
-      allow delete: if isValidId(entryId)
-        && isVerifiedSignedIn()
-        && existing().player_id == request.auth.uid;
-    }
-
-    match /shop_items/{itemId} {
-      allow get: if isValidId(itemId) && isVerifiedSignedIn();
-      allow list: if isVerifiedSignedIn() && resource.data.price >= 0;
-      allow create, update, delete: if false;
-    }
-
-    match /friends/{friendshipId} {
-      allow get: if isValidId(friendshipId)
-        && isVerifiedSignedIn()
-        && (resource.data.player_id == request.auth.uid || resource.data.friend_id == request.auth.uid);
-      allow list: if isVerifiedSignedIn()
-        && (resource.data.player_id == request.auth.uid || resource.data.friend_id == request.auth.uid);
-      allow create: if isValidId(friendshipId)
-        && isVerifiedSignedIn()
-        && isValidFriendLink(incoming())
-        && incoming().player_id == request.auth.uid
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isValidId(friendshipId)
-        && isVerifiedSignedIn()
-        && (existing().player_id == request.auth.uid || existing().friend_id == request.auth.uid)
-        && isValidFriendLink(incoming())
-        && incoming().player_id == existing().player_id
-        && incoming().friend_id == existing().friend_id
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'friend_name', 'updatedAt']);
-      allow delete: if isValidId(friendshipId)
-        && isVerifiedSignedIn()
-        && (existing().player_id == request.auth.uid || existing().friend_id == request.auth.uid);
     }
   }
 }

@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Preserved private authenticated driver profile synced to Google Sign-In.",
+      "description": "Private authenticated driver profile, garage customization, settings, and personal lap leaderboards synced to Google Sign-In.",
       "type": "object",
       "properties": {
         "ownerId": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
@@ -36,7 +36,7 @@
     },
     "UserGhost": {
       "title": "UserGhost",
-      "description": "Preserved Time Trial ghost replay path per circuit.",
+      "description": "Time Trial ghost replay path per circuit.",
       "type": "object",
       "properties": {
         "ownerId": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
@@ -50,7 +50,7 @@
     },
     "TrackRecord": {
       "title": "TrackRecord",
-      "description": "Preserved track record entry.",
+      "description": "Global circuit lap record entry for Apex Rush Racing leaderboards.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
@@ -63,125 +63,20 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "driverName", "trackId", "carName", "mode", "time", "createdAt", "updatedAt"]
-    },
-    "Player": {
-      "title": "Player",
-      "description": "Battle Royale player progression, Battle Pass, Daily Quests, and character loadout synced to Google Sign-In.",
-      "type": "object",
-      "properties": {
-        "ownerId": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
-        "username": { "type": "string", "minLength": 1, "maxLength": 24 },
-        "avatar": { "type": "string", "maxLength": 400 },
-        "level": { "type": "number" },
-        "xp": { "type": "number" },
-        "wins": { "type": "number" },
-        "kills": { "type": "number" },
-        "coins": { "type": "number" },
-        "matchesPlayed": { "type": "number" },
-        "battlePassTier": { "type": "number" },
-        "battlePassPremium": { "type": "boolean" },
-        "loadout": { "type": "object" },
-        "quests": { "type": "object" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": [
-        "ownerId", "username", "avatar", "level", "xp", "wins", "kills", "coins",
-        "matchesPlayed", "battlePassTier", "battlePassPremium", "loadout", "quests",
-        "createdAt", "updatedAt"
-      ]
-    },
-    "Match": {
-      "title": "Match",
-      "description": "Completed Battle Royale match record.",
-      "type": "object",
-      "properties": {
-        "match_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 64 },
-        "mode": { "type": "string", "enum": ["solo", "duo", "squad", "zerobuild", "creative"], "maxLength": 16 },
-        "players": { "type": "array" },
-        "winner": { "type": "string", "minLength": 1, "maxLength": 48 },
-        "started_at": { "type": "string", "maxLength": 48 },
-        "ended_at": { "type": "string", "maxLength": 48 },
-        "createdBy": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["match_id", "mode", "players", "winner", "started_at", "ended_at", "createdBy", "createdAt", "updatedAt"]
-    },
-    "InventoryItem": {
-      "title": "InventoryItem",
-      "description": "Owned cosmetic item in player locker.",
-      "type": "object",
-      "properties": {
-        "player_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
-        "item_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 48 },
-        "item_type": { "type": "string", "enum": ["skin", "hair", "backpack", "pickaxe", "glider", "emote"], "maxLength": 16 },
-        "equipped": { "type": "boolean" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["player_id", "item_id", "item_type", "equipped", "createdAt", "updatedAt"]
-    },
-    "ShopItem": {
-      "title": "ShopItem",
-      "description": "Daily item shop catalog entry.",
-      "type": "object",
-      "properties": {
-        "item_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 48 },
-        "name": { "type": "string", "minLength": 1, "maxLength": 48 },
-        "price": { "type": "number" },
-        "rarity": { "type": "string", "enum": ["common", "uncommon", "rare", "epic", "legendary"], "maxLength": 16 },
-        "type": { "type": "string", "enum": ["skin", "hair", "backpack", "pickaxe", "glider", "emote"], "maxLength": 16 }
-      },
-      "required": ["item_id", "name", "price", "rarity", "type"]
-    },
-    "FriendLink": {
-      "title": "FriendLink",
-      "description": "Friend relationship between players.",
-      "type": "object",
-      "properties": {
-        "player_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
-        "friend_id": { "type": "string", "pattern": "^[a-zA-Z0-9_\\-]+$", "maxLength": 128 },
-        "friend_name": { "type": "string", "minLength": 1, "maxLength": 24 },
-        "status": { "type": "string", "enum": ["pending", "accepted", "blocked"], "maxLength": 16 },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["player_id", "friend_id", "friend_name", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "Preserved owner-isolated racing profile."
+      "description": "Owner-isolated driver profile, garage, settings, and personal lap leaderboards."
     },
     "/users/{userId}/ghosts/{trackId}": {
       "schema": { "$ref": "#/entities/UserGhost" },
-      "description": "Preserved Time Trial ghost replay path."
+      "description": "Owner-isolated Time Trial ghost replay path."
     },
     "/trackRecords/{recordId}": {
       "schema": { "$ref": "#/entities/TrackRecord" },
-      "description": "Preserved track record leaderboard."
-    },
-    "/players/{playerId}": {
-      "schema": { "$ref": "#/entities/Player" },
-      "description": "Battle Royale player progression, loadout, battle pass, and stats."
-    },
-    "/matches/{matchId}": {
-      "schema": { "$ref": "#/entities/Match" },
-      "description": "Battle Royale match history records."
-    },
-    "/inventory/{entryId}": {
-      "schema": { "$ref": "#/entities/InventoryItem" },
-      "description": "Player owned cosmetic items."
-    },
-    "/shop_items/{itemId}": {
-      "schema": { "$ref": "#/entities/ShopItem" },
-      "description": "Daily shop items."
-    },
-    "/friends/{friendshipId}": {
-      "schema": { "$ref": "#/entities/FriendLink" },
-      "description": "Player friend relationships."
+      "description": "Global verified track record leaderboard."
     }
   }
 }

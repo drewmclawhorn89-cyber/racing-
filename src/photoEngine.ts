@@ -38,6 +38,16 @@ export interface TrackWorldData {
   sampleProps: TrackProp[][];
 }
 
+export interface SkidSegment {
+  x1: number;
+  z1: number;
+  x2: number;
+  z2: number;
+  alpha: number;
+}
+
+export type QualityMode = 'ultra' | 'high' | 'perf';
+
 export function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
@@ -348,6 +358,47 @@ function createCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRendering
   return [c, ctx];
 }
 
+// Fast 3x3 Unsharp-Mask + Micro-Clarity pass executed once per photographic asset
+function applyUnsharpClarity(imgData: ImageData, amount = 0.42, microContrast = 0.06): void {
+  const w = imgData.width;
+  const h = imgData.height;
+  const d = imgData.data;
+  const src = new Uint8ClampedArray(d);
+  const rowStride = w * 4;
+
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = (y * w + x) * 4;
+      if (src[idx + 3] < 12) continue;
+      for (let ch = 0; ch < 3; ch++) {
+        const c = src[idx + ch];
+        const blur = (
+          src[idx - 4 + ch] +
+          src[idx + 4 + ch] +
+          src[idx - rowStride + ch] +
+          src[idx + rowStride + ch]
+        ) * 0.25;
+        let v = c + (c - blur) * amount;
+        // Subtle S-curve micro-clarity for rich 4K dynamic punch
+        const norm = v / 255;
+        v += Math.sin(norm * Math.PI * 2) * (-microContrast * 255 * 0.25);
+        d[idx + ch] = v < 0 ? 0 : v > 255 ? 255 : v | 0;
+      }
+    }
+  }
+}
+
+function sharpenImageToCanvas(img: HTMLImageElement, amount = 0.36): HTMLCanvasElement {
+  const w = img.naturalWidth || 1376;
+  const h = img.naturalHeight || 768;
+  const [c, ctx] = createCanvas(w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  applyUnsharpClarity(imgData, amount, 0.05);
+  ctx.putImageData(imgData, 0, 0);
+  return c;
+}
+
 function extractChaseCarCanvas(img: HTMLImageElement): HTMLCanvasElement {
   const w = img.naturalWidth || 1200;
   const h = img.naturalHeight || 896;
@@ -367,10 +418,7 @@ function extractChaseCarCanvas(img: HTMLImageElement): HTMLCanvasElement {
     const b = d[idx + 2];
     const maxc = Math.max(r, g, b);
     const minc = Math.min(r, g, b);
-    // Studio wall & floor are neutral dark-to-mid slate; pearl car body is bright (maxc >= 90),
-    // red taillights have high R-B chroma, and tires inside tire box are ultra-dark (maxc < 22)
     if (maxc >= 82 || maxc - minc > 20) return false;
-    // Preserve deep black tires & diffuser inside car footprint once below top fender line
     if (y >= h * 0.56 && x >= w * 0.197 && x <= w * 0.803 && maxc < 26) return false;
     const nDist = Math.abs(r - refR) + Math.abs(g - refG) + Math.abs(b - refB);
     return nDist < 36;
@@ -421,7 +469,6 @@ function extractChaseCarCanvas(img: HTMLImageElement): HTMLCanvasElement {
     tryPush(x, y - 1);
   }
 
-  // Clean concrete studio floor below tire contact line & under diffuser gap
   const leftTireX = Math.floor(w * 0.196);
   const rightTireX = Math.floor(w * 0.804);
   const bottomCutY = Math.floor(h * 0.766);
@@ -444,8 +491,9 @@ function extractChaseCarCanvas(img: HTMLImageElement): HTMLCanvasElement {
     }
   }
 
+  applyUnsharpClarity(imgData, 0.48, 0.06);
   ctx.putImageData(imgData, 0, 0);
-  // Tight crop around car silhouette
+
   const cropX = Math.floor(w * 0.185);
   const cropY = Math.floor(h * 0.22);
   const cropW = Math.floor(w * 0.63);
@@ -504,7 +552,6 @@ function extractTopDownCarCanvas(img: HTMLImageElement): HTMLCanvasElement {
       const nr = d[ni], ng = d[ni + 1], nb = d[ni + 2];
       const maxc = Math.max(nr, ng, nb);
       const minc = Math.min(nr, ng, nb);
-      // Top-down car studio background is neutral medium-dark gray (38..78), while car is silver (>95) or black shadow/trim (<30)
       if (maxc < 86 && maxc > 24 && (maxc - minc) < 16) {
         const diff = Math.abs(nr - r) + Math.abs(ng - g) + Math.abs(nb - b);
         if (diff < 32) {
@@ -520,7 +567,9 @@ function extractTopDownCarCanvas(img: HTMLImageElement): HTMLCanvasElement {
     tryPush(x, y - 1);
   }
 
+  applyUnsharpClarity(imgData, 0.45, 0.06);
   ctx.putImageData(imgData, 0, 0);
+
   const cropX = Math.floor(w * 0.25);
   const cropY = Math.floor(h * 0.04);
   const cropW = Math.floor(w * 0.50);
@@ -575,6 +624,7 @@ function extractCockpitOverlay(img: HTMLImageElement): HTMLCanvasElement {
     pushIfWhite(x, y - 1);
   }
 
+  applyUnsharpClarity(imgData, 0.38, 0.05);
   ctx.putImageData(imgData, 0, 0);
   return c;
 }
@@ -607,15 +657,15 @@ function buildTintedSprite(base: HTMLCanvasElement, hexColor: string, isGhost = 
     const maxc = Math.max(r, g, b);
     const minc = Math.min(r, g, b);
     const sat = maxc > 0 ? (maxc - minc) / maxc : 0;
-    // Tint silver-white metallic paint panels while keeping red taillights, dark tires, and glass untouched
     if (maxc > 76 && sat < 0.24) {
       const lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
-      const shade = Math.pow(lum, 0.92);
-      const spec = lum > 0.88 ? (lum - 0.88) * 140 : 0;
-      const mix = clamp((maxc - 76) / 65, 0, 1);
-      const nr = clamp(tr * shade * 1.12 + spec, 0, 255);
-      const ng = clamp(tg * shade * 1.12 + spec, 0, 255);
-      const nb = clamp(tb * shade * 1.12 + spec, 0, 255);
+      const shade = Math.pow(lum, 0.88);
+      // Clearcoat metallic specular glint
+      const spec = lum > 0.82 ? (lum - 0.82) * 210 : 0;
+      const mix = clamp((maxc - 76) / 60, 0, 1);
+      const nr = clamp(tr * shade * 1.16 + spec, 0, 255);
+      const ng = clamp(tg * shade * 1.16 + spec, 0, 255);
+      const nb = clamp(tb * shade * 1.16 + spec, 0, 255);
       d[i] = Math.round(lerp(r, nr, mix));
       d[i + 1] = Math.round(lerp(g, ng, mix));
       d[i + 2] = Math.round(lerp(b, nb, mix));
@@ -634,7 +684,6 @@ function buildTintedStudioCanvas(img: HTMLImageElement, studioKey: string, hexCo
   const d = imgData.data;
 
   const [tr, tg, tb] = hexToRgb(hexColor);
-  // Elliptical mask localized tightly over the car body in each studio shot
   const cx = studioKey === 'studio_hyper' ? 0.50 : 0.52;
   const cy = studioKey === 'studio_hyper' ? 0.54 : 0.49;
   const rx = 0.37;
@@ -656,16 +705,15 @@ function buildTintedStudioCanvas(img: HTMLImageElement, studioKey: string, hexCo
       const minc = Math.min(r, g, b);
       const sat = maxc > 0 ? (maxc - minc) / maxc : 0;
 
-      // Only recolor neutral silver/white bodywork, leaving studio floor/walls/glass/lights untouched
       if (maxc > 78 && sat < 0.20) {
         const mask = clamp((1.0 - dist2) * 3.5, 0, 1);
         const lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
-        const shade = Math.pow(lum, 0.90);
-        const spec = lum > 0.86 ? (lum - 0.86) * 165 : 0;
-        const mix = clamp((maxc - 78) / 58, 0, 1) * mask;
-        const nr = clamp(tr * shade * 1.15 + spec, 0, 255);
-        const ng = clamp(tg * shade * 1.15 + spec, 0, 255);
-        const nb = clamp(tb * shade * 1.15 + spec, 0, 255);
+        const shade = Math.pow(lum, 0.88);
+        const spec = lum > 0.82 ? (lum - 0.82) * 215 : 0;
+        const mix = clamp((maxc - 78) / 56, 0, 1) * mask;
+        const nr = clamp(tr * shade * 1.16 + spec, 0, 255);
+        const ng = clamp(tg * shade * 1.16 + spec, 0, 255);
+        const nb = clamp(tb * shade * 1.16 + spec, 0, 255);
         d[idx] = Math.round(lerp(r, nr, mix));
         d[idx + 1] = Math.round(lerp(g, ng, mix));
         d[idx + 2] = Math.round(lerp(b, nb, mix));
@@ -673,6 +721,7 @@ function buildTintedStudioCanvas(img: HTMLImageElement, studioKey: string, hexCo
     }
   }
 
+  applyUnsharpClarity(imgData, 0.42, 0.06);
   ctx.putImageData(imgData, 0, 0);
   return c;
 }
@@ -682,7 +731,6 @@ interface CamPt3 {
   z: number;
 }
 
-// Clip a 3D XZ ground quad against near plane z >= zNear using Sutherland-Hodgman
 function clipPolygonNearZ(poly: CamPt3[], zNear: number): CamPt3[] {
   const out: CamPt3[] = [];
   const len = poly.length;
@@ -711,42 +759,54 @@ export class RealLifeRenderer {
   width = window.innerWidth;
   height = window.innerHeight;
   dpr = 1;
+  quality: QualityMode = 'ultra';
 
   rawImages: Record<string, HTMLImageElement> = {};
+  bgSharpened: Record<string, HTMLCanvasElement> = {};
   chaseBase: HTMLCanvasElement | null = null;
   topBase: HTMLCanvasElement | null = null;
   cockpitOverlay: HTMLCanvasElement | null = null;
   spriteCache = new Map<string, HTMLCanvasElement>();
   studioCache = new Map<string, HTMLCanvasElement>();
 
-  rainDrops: Array<{ x: number; y: number; len: number; spd: number }> = [];
+  rainDrops: Array<{ x: number; y: number; len: number; spd: number; depth: number }> = [];
   windshieldDrops: Array<{ x: number; y: number; r: number; vy: number }> = [];
   smoothCamYaw: number | null = null;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, initialQuality: QualityMode = 'ultra') {
+    this.quality = initialQuality;
     this.canvas = document.createElement('canvas');
     this.canvas.style.display = 'block';
     this.canvas.style.width = '100%';
     this.canvas.style.height = '100%';
     container.appendChild(this.canvas);
-    this.ctx = this.canvas.getContext('2d')!;
+    this.ctx = this.canvas.getContext('2d', { alpha: false })!;
     this.resize();
     this.initRain();
     this.preloadAssets();
   }
 
+  setQuality(q: QualityMode) {
+    this.quality = q;
+    this.resize();
+  }
+
   initRain() {
-    this.rainDrops = Array.from({ length: 180 }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      len: 14 + Math.random() * 22,
-      spd: 1.4 + Math.random() * 0.9
-    }));
-    this.windshieldDrops = Array.from({ length: 45 }, () => ({
-      x: 0.1 + Math.random() * 0.8,
-      y: Math.random() * 0.55,
-      r: 1.5 + Math.random() * 2.8,
-      vy: 0.08 + Math.random() * 0.14
+    this.rainDrops = Array.from({ length: 240 }, () => {
+      const depth = 0.5 + Math.random() * 0.9;
+      return {
+        x: Math.random(),
+        y: Math.random(),
+        len: (12 + Math.random() * 24) * depth,
+        spd: (1.3 + Math.random() * 0.9) * depth,
+        depth
+      };
+    });
+    this.windshieldDrops = Array.from({ length: 58 }, () => ({
+      x: 0.08 + Math.random() * 0.84,
+      y: Math.random() * 0.58,
+      r: 1.5 + Math.random() * 3.0,
+      vy: 0.07 + Math.random() * 0.15
     }));
   }
 
@@ -764,6 +824,8 @@ export class RealLifeRenderer {
           this.spriteCache.clear();
         } else if (key === 'cockpit_raw') {
           this.cockpitOverlay = extractCockpitOverlay(img);
+        } else if (key.startsWith('bg_')) {
+          this.bgSharpened[key] = sharpenImageToCanvas(img, 0.34);
         } else if (key.startsWith('studio_')) {
           this.studioCache.clear();
         }
@@ -773,12 +835,26 @@ export class RealLifeRenderer {
   }
 
   resize() {
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const nativeDpr = window.devicePixelRatio || 1;
+    let targetDpr = 1;
+    if (this.quality === 'ultra') {
+      // Render at full native 4K/Retina DPR or 1.6x supersampling on 1080p screens (capped at 3840w)
+      const maxWidthCap = 3840 / Math.max(1, window.innerWidth);
+      targetDpr = clamp(Math.max(nativeDpr, 1.6), 1.0, Math.min(3.0, maxWidthCap));
+    } else if (this.quality === 'high') {
+      targetDpr = Math.min(nativeDpr, 2);
+    } else {
+      targetDpr = 1;
+    }
+
+    this.dpr = targetDpr;
     this.width = window.innerWidth;
     this.height = window.innerHeight;
     this.canvas.width = Math.max(1, Math.floor(this.width * this.dpr));
     this.canvas.height = Math.max(1, Math.floor(this.height * this.dpr));
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = this.quality === 'perf' ? 'medium' : 'high';
   }
 
   getCarSprite(kind: 'chase' | 'top', colorHex: string, isGhost = false): HTMLCanvasElement | null {
@@ -811,7 +887,7 @@ export class RealLifeRenderer {
     for (let i = 0; i < this.rainDrops.length; i++) {
       const d = this.rainDrops[i];
       d.y += d.spd * dt;
-      d.x -= d.spd * 0.12 * dt;
+      d.x -= d.spd * 0.14 * dt;
       if (d.y > 1.05) {
         d.y = -0.05;
         d.x = Math.random();
@@ -823,7 +899,7 @@ export class RealLifeRenderer {
       w.y += w.vy * dt;
       if (w.y > 0.62) {
         w.y = 0.02 + Math.random() * 0.1;
-        w.x = 0.12 + Math.random() * 0.76;
+        w.x = 0.10 + Math.random() * 0.80;
       }
     }
   }
@@ -841,7 +917,7 @@ export class RealLifeRenderer {
     const ctx = this.ctx;
     const W = this.width;
     const H = this.height;
-    ctx.fillStyle = '#090a0f';
+    ctx.fillStyle = '#07080c';
     ctx.fillRect(0, 0, W, H);
 
     const studioKey =
@@ -856,7 +932,6 @@ export class RealLifeRenderer {
     const wheels = (custom && custom.wheels) || '5spoke';
     const studioImg = this.getStudioShowcaseImage(studioKey, color);
 
-    // Angle-driven view selection in Garage: default Front 3/4 studio, drag left/right past 0.85 rad to inspect Rear Widebody + Spoiler
     const yawDelta = Math.atan2(Math.sin(orbitYaw - 0.8), Math.cos(orbitYaw - 0.8));
     const rearBlend = !isMenu ? clamp((Math.abs(yawDelta) - 0.75) / 0.45, 0, 1) : 0;
 
@@ -882,6 +957,16 @@ export class RealLifeRenderer {
       ctx.save();
       ctx.globalAlpha = 1 - rearBlend;
       ctx.drawImage(studioImg, dx, dy, dw, dh);
+
+      // Subtle animated studio softbox sweep reflection across bodywork
+      const sweepPos = ((nowSec * 0.18) % 1.6) - 0.3;
+      const swGrad = ctx.createLinearGradient(W * (sweepPos - 0.14), H * 0.2, W * (sweepPos + 0.14), H * 0.8);
+      swGrad.addColorStop(0, 'rgba(255,255,255,0)');
+      swGrad.addColorStop(0.5, 'rgba(255,255,255,0.055)');
+      swGrad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.globalCompositeOperation = 'screen';
+      ctx.fillStyle = swGrad;
+      ctx.fillRect(0, 0, W, H);
       ctx.restore();
     } else if (!studioImg) {
       const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -891,31 +976,53 @@ export class RealLifeRenderer {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Rear Garage Angle Showcase (displays painted Rear Widebody + live Spoiler & Wheel accents)
+    // Rear Garage Angle Showcase (displays painted Rear Widebody + Floor Reflection + Spoiler & Wheel accents)
     if (rearBlend > 0.01) {
       ctx.save();
       ctx.globalAlpha = rearBlend;
       const bg = ctx.createLinearGradient(0, 0, 0, H);
-      bg.addColorStop(0, '#0c0f16');
-      bg.addColorStop(0.56, '#141923');
-      bg.addColorStop(0.58, '#1b1f29');
-      bg.addColorStop(1, '#090b10');
+      bg.addColorStop(0, '#090b10');
+      bg.addColorStop(0.55, '#131823');
+      bg.addColorStop(0.58, '#1a1f2b');
+      bg.addColorStop(1, '#07090e');
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
+      // Studio cyclorama horizon glow
+      const rim = ctx.createRadialGradient(W * 0.5, H * 0.56, 20, W * 0.5, H * 0.56, W * 0.42);
+      rim.addColorStop(0, 'rgba(148, 163, 184, 0.18)');
+      rim.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      ctx.fillStyle = rim;
+      ctx.fillRect(0, H * 0.2, W, H * 0.6);
+
       // Overhead studio light reflection strip
-      const lg = ctx.createLinearGradient(0, H * 0.08, 0, H * 0.16);
+      const lg = ctx.createLinearGradient(0, H * 0.08, 0, H * 0.15);
       lg.addColorStop(0, 'rgba(255,255,255,0)');
-      lg.addColorStop(0.5, 'rgba(248,250,252,0.72)');
+      lg.addColorStop(0.5, 'rgba(248,250,252,0.85)');
       lg.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = lg;
-      ctx.fillRect(W * 0.26, H * 0.09, W * 0.48, H * 0.045);
+      ctx.fillRect(W * 0.24, H * 0.09, W * 0.52, H * 0.04);
 
       const scaleZoom = clamp(1.35 - (orbitDist - 4.2) * 0.06, 0.75, 1.45);
       const unitScale = H * 0.17 * scaleZoom;
+      const baseY = H * 0.71;
+
+      // Glossy studio floor reflection beneath rear car
+      const sprite = this.getCarSprite('chase', color, false);
+      if (sprite) {
+        const carW = clamp(unitScale * 2.35, 10, 580);
+        const carH = carW * (sprite.height / sprite.width);
+        ctx.save();
+        ctx.translate(W * 0.5, baseY);
+        ctx.scale(1, -0.34);
+        ctx.globalAlpha = rearBlend * 0.24;
+        ctx.drawImage(sprite, -carW * 0.5, -carH, carW, carH);
+        ctx.restore();
+      }
+
       this.drawRearCarSprite(
         W * 0.5,
-        H * 0.72,
+        baseY,
         unitScale,
         color,
         false,
@@ -925,26 +1032,26 @@ export class RealLifeRenderer {
         0,
         0,
         spoiler,
-        wheels
+        wheels,
+        weather
       );
       ctx.restore();
     }
 
-    // Garage active customization badge in center bottom above hint
     if (!isMenu) {
       const wheelLabel = wheels === '5spoke' ? '5-Spoke' : wheels === 'mesh' ? 'Mesh' : wheels === 'deep' ? 'Deep Dish' : 'Carbon Aero';
       const wingLabel = spoiler === 'none' ? 'Stock Lip' : spoiler === 'street' ? 'Street Wing' : spoiler === 'gt' ? 'GT Carbon Wing' : 'Ducktail';
       const angleLabel = rearBlend > 0.5 ? 'Rear Widebody View' : 'Studio 3/4 View';
       ctx.save();
-      ctx.fillStyle = 'rgba(8, 9, 12, 0.76)';
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+      ctx.fillStyle = 'rgba(8, 9, 12, 0.80)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
       ctx.lineWidth = 1;
       const bw = 360;
       const bx = W * 0.5 - bw * 0.5;
       const by = H - 96;
       ctx.fillRect(bx, by, bw, 32);
       ctx.strokeRect(bx, by, bw, 32);
-      ctx.fillStyle = '#e2e8f0';
+      ctx.fillStyle = '#f1f5f9';
       ctx.font = '600 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -952,26 +1059,25 @@ export class RealLifeRenderer {
       ctx.restore();
     }
 
-    // Weather mood grading + dramatic studio vignette
     if (weather === 'sunset') {
       const sGrad = ctx.createLinearGradient(0, 0, W, H);
       sGrad.addColorStop(0, 'rgba(249, 115, 22, 0.16)');
-      sGrad.addColorStop(1, 'rgba(15, 23, 42, 0.25)');
+      sGrad.addColorStop(1, 'rgba(15, 23, 42, 0.24)');
       ctx.fillStyle = sGrad;
       ctx.fillRect(0, 0, W, H);
     } else if (weather === 'night') {
       ctx.fillStyle = 'rgba(2, 6, 23, 0.34)';
       ctx.fillRect(0, 0, W, H);
     } else if (weather === 'rain') {
-      ctx.fillStyle = 'rgba(30, 41, 59, 0.28)';
+      ctx.fillStyle = 'rgba(30, 41, 59, 0.26)';
       ctx.fillRect(0, 0, W, H);
-      this.drawScreenRain(0.35);
+      this.drawScreenRain(0.36);
     }
 
     const vig = ctx.createLinearGradient(0, 0, W, 0);
-    vig.addColorStop(0, isMenu ? 'rgba(8, 9, 12, 0.84)' : 'rgba(8, 9, 12, 0.52)');
-    vig.addColorStop(0.42, 'rgba(8, 9, 12, 0.08)');
-    vig.addColorStop(1, 'rgba(8, 9, 12, 0.52)');
+    vig.addColorStop(0, isMenu ? 'rgba(6, 7, 10, 0.86)' : 'rgba(6, 7, 10, 0.54)');
+    vig.addColorStop(0.42, 'rgba(6, 7, 10, 0.06)');
+    vig.addColorStop(1, 'rgba(6, 7, 10, 0.54)');
     ctx.fillStyle = vig;
     ctx.fillRect(0, 0, W, H);
   }
@@ -981,15 +1087,15 @@ export class RealLifeRenderer {
     const W = this.width;
     const H = this.height;
     ctx.save();
-    ctx.strokeStyle = `rgba(203, 213, 225, ${alpha})`;
-    ctx.lineWidth = 1.3;
+    ctx.strokeStyle = `rgba(215, 226, 240, ${alpha})`;
+    ctx.lineWidth = 1.25;
     ctx.beginPath();
     for (let i = 0; i < this.rainDrops.length; i++) {
       const r = this.rainDrops[i];
       const x = r.x * W;
       const y = r.y * H;
       ctx.moveTo(x, y);
-      ctx.lineTo(x - r.len * 0.14, y + r.len);
+      ctx.lineTo(x - r.len * 0.15, y + r.len);
     }
     ctx.stroke();
     ctx.restore();
@@ -1002,7 +1108,10 @@ export class RealLifeRenderer {
     remotes: Map<string, any>;
     ghostCar: { x: number; z: number; h: number; color: string } | null;
     smokeData: any[];
-    cameraMode: number; // 0 = Real Chase, 1 = Real Cockpit POV, 2 = Aerial Drone 2D
+    skidMarks?: SkidSegment[];
+    countdownStep?: number;
+    raceActive?: boolean;
+    cameraMode: number;
     isPhoto: boolean;
     photoFov: number;
     photoTilt: number;
@@ -1019,10 +1128,9 @@ export class RealLifeRenderer {
     const H = this.height;
 
     ctx.save();
-    ctx.fillStyle = '#090b10';
+    ctx.fillStyle = '#07090e';
     ctx.fillRect(0, 0, W, H);
 
-    // Optional Photo Mode roll transform
     if (params.isPhoto && params.photoTilt !== 0) {
       ctx.translate(W * 0.5, H * 0.5);
       ctx.rotate((params.photoTilt * Math.PI) / 180);
@@ -1036,19 +1144,62 @@ export class RealLifeRenderer {
     }
 
     if (track.isRain) {
-      this.drawScreenRain(params.cameraMode === 1 ? 0.25 : 0.45);
+      this.drawScreenRain(params.cameraMode === 1 ? 0.26 : 0.46);
       if (params.cameraMode === 1) {
         ctx.save();
-        ctx.fillStyle = 'rgba(226, 232, 240, 0.38)';
         for (let i = 0; i < this.windshieldDrops.length; i++) {
           const d = this.windshieldDrops[i];
+          const dx = d.x * W;
+          const dy = d.y * H;
+          ctx.fillStyle = 'rgba(226, 232, 240, 0.34)';
           ctx.beginPath();
-          ctx.ellipse(d.x * W, d.y * H, d.r, d.r * 1.45, 0, 0, Math.PI * 2);
+          ctx.ellipse(dx, dy, d.r, d.r * 1.45, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+          ctx.beginPath();
+          ctx.arc(dx - d.r * 0.25, dy - d.r * 0.35, Math.max(0.6, d.r * 0.3), 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
       }
     }
+
+    // Peripheral high-speed & nitro motion sense
+    const mph = player.speed * 2.55;
+    if (!params.isPhoto && params.cameraMode !== 2 && (mph > 118 || player.nitroActive)) {
+      const intensity = clamp((mph - 118) / 95 + (player.nitroActive ? 0.42 : 0), 0, 0.72);
+      ctx.save();
+      const rad = ctx.createRadialGradient(W * 0.5, H * 0.52, Math.min(W, H) * 0.30, W * 0.5, H * 0.52, Math.max(W, H) * 0.72);
+      rad.addColorStop(0, 'rgba(0,0,0,0)');
+      rad.addColorStop(1, player.nitroActive ? `rgba(14, 165, 233, ${intensity * 0.22})` : `rgba(8, 10, 16, ${intensity * 0.34})`);
+      ctx.fillStyle = rad;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = player.nitroActive
+        ? `rgba(125, 211, 252, ${intensity * 0.34})`
+        : `rgba(241, 245, 249, ${intensity * 0.20})`;
+      ctx.lineWidth = 1.4;
+      const cx = W * 0.5;
+      const cy = H * 0.45;
+      const tNow = performance.now() * 0.012;
+      ctx.beginPath();
+      for (let i = 0; i < 22; i++) {
+        const ang = (i / 22) * Math.PI * 2 + (i % 2 === 0 ? 0.04 : -0.04);
+        const r0 = Math.max(W, H) * (0.40 + ((i * 7 + Math.floor(tNow)) % 5) * 0.03);
+        const r1 = r0 + 55 + intensity * 65;
+        ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+        ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Crisp cinematic optical edge vignette
+    const edgeVig = ctx.createRadialGradient(W * 0.5, H * 0.5, Math.min(W, H) * 0.42, W * 0.5, H * 0.5, Math.max(W, H) * 0.78);
+    edgeVig.addColorStop(0, 'rgba(0,0,0,0)');
+    edgeVig.addColorStop(1, 'rgba(4, 6, 10, 0.38)');
+    ctx.fillStyle = edgeVig;
+    ctx.fillRect(0, 0, W, H);
 
     ctx.restore();
   }
@@ -1060,6 +1211,9 @@ export class RealLifeRenderer {
     remotes: Map<string, any>;
     ghostCar: { x: number; z: number; h: number; color: string } | null;
     smokeData: any[];
+    skidMarks?: SkidSegment[];
+    countdownStep?: number;
+    raceActive?: boolean;
     cameraMode: number;
     isPhoto: boolean;
     photoFov: number;
@@ -1078,7 +1232,7 @@ export class RealLifeRenderer {
     const isSunset = weather === 'sunset';
     const isCockpit = cameraMode === 1 && !params.isPhoto;
 
-    // 1. TRUE 3D CAMERA POSE (Chase / Cockpit / Photo Orbit)
+    // 1. TRUE 3D CAMERA POSE
     const currentYaw = this.smoothCamYaw ?? player.heading;
     const nextYaw = dampAngle(currentYaw, player.heading, 16, 1 / 60);
     this.smoothCamYaw = nextYaw;
@@ -1145,22 +1299,22 @@ export class RealLifeRenderer {
       sy: horizonY + ((camHeight - cy) / cz) * focalY
     });
 
-    // 2. REAL-LIFE PHOTOGRAPHIC HORIZON BACKDROP (Seam-free 360° pan)
+    // 2. SHARPENED REAL-LIFE PHOTOGRAPHIC HORIZON BACKDROP (Seam-free 360° pan)
     const bgKey =
       track.def.theme === 'desert' ? 'bg_desert'
         : track.def.theme === 'mountain' ? 'bg_mountain'
           : track.def.theme === 'coastal' ? 'bg_coastal' : 'bg_city';
-    const bgImg = this.rawImages[bgKey];
+    const bgImg: HTMLCanvasElement | HTMLImageElement | undefined = this.bgSharpened[bgKey] || this.rawImages[bgKey];
 
     const skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY + 12);
     if (isNight) {
-      skyGrad.addColorStop(0, '#020617');
-      skyGrad.addColorStop(1, '#0f172a');
+      skyGrad.addColorStop(0, '#02050f');
+      skyGrad.addColorStop(1, '#0c1528');
     } else if (isRain) {
-      skyGrad.addColorStop(0, '#1e293b');
+      skyGrad.addColorStop(0, '#1a2433');
       skyGrad.addColorStop(1, '#475569');
     } else if (isSunset) {
-      skyGrad.addColorStop(0, '#1e1b4b');
+      skyGrad.addColorStop(0, '#17153b');
       skyGrad.addColorStop(0.55, '#9d174d');
       skyGrad.addColorStop(1, '#fb923c');
     } else {
@@ -1170,67 +1324,109 @@ export class RealLifeRenderer {
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, W, horizonY + 14);
 
-    if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
-      const skyH = Math.max(80, horizonY + 32);
-      const scale = Math.max(W / bgImg.naturalWidth, skyH / (bgImg.naturalHeight * 0.62));
-      const tileW = bgImg.naturalWidth * scale;
-      const tileH = bgImg.naturalHeight * scale;
-      const doubleW = tileW * 2;
-      const panRatio = (((-camYaw / (Math.PI * 2)) % 1) + 1) % 1;
-      const offsetX = -panRatio * doubleW;
-      const drawY = horizonY + 18 - tileH * 0.56;
+    if (bgImg) {
+      const bw = bgImg instanceof HTMLImageElement ? bgImg.naturalWidth : bgImg.width;
+      const bh = bgImg instanceof HTMLImageElement ? bgImg.naturalHeight : bgImg.height;
+      if (bw > 0 && bh > 0) {
+        const skyH = Math.max(80, horizonY + 32);
+        const scale = Math.max(W / bw, skyH / (bh * 0.62));
+        const tileW = bw * scale;
+        const tileH = bh * scale;
+        const doubleW = tileW * 2;
+        const panRatio = (((-camYaw / (Math.PI * 2)) % 1) + 1) % 1;
+        const offsetX = -panRatio * doubleW;
+        const drawY = horizonY + 18 - tileH * 0.56;
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, W, horizonY + 16);
-      ctx.clip();
-      ctx.globalAlpha = isNight ? 0.44 : isRain ? 0.68 : 0.95;
-
-      for (let x = offsetX; x < W; x += doubleW) {
-        ctx.drawImage(bgImg, x, drawY, tileW, tileH);
         ctx.save();
-        ctx.translate(x + doubleW, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(bgImg, 0, drawY, tileW, tileH);
+        ctx.beginPath();
+        ctx.rect(0, 0, W, horizonY + 16);
+        ctx.clip();
+        ctx.globalAlpha = isNight ? 0.42 : isRain ? 0.72 : 0.98;
+
+        for (let x = offsetX; x < W; x += doubleW) {
+          ctx.drawImage(bgImg, x, drawY, tileW, tileH);
+          ctx.save();
+          ctx.translate(x + doubleW, 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(bgImg, 0, drawY, tileW, tileH);
+          ctx.restore();
+        }
         ctx.restore();
+      }
+    }
+
+    // Directional Sun Disk & Anamorphic Solar Flare (Day / Sunset)
+    const sunAzimuth = 0.72;
+    let sunDiff = sunAzimuth - camYaw;
+    while (sunDiff > Math.PI) sunDiff -= Math.PI * 2;
+    while (sunDiff < -Math.PI) sunDiff += Math.PI * 2;
+    if (!isNight && !isRain && Math.abs(sunDiff) < 1.15) {
+      const sunX = W * 0.5 + Math.tan(sunDiff) * fovScale * 0.75;
+      const sunY = horizonY - (isSunset ? 34 : 118);
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      const sunGlow = ctx.createRadialGradient(sunX, sunY, 4, sunX, sunY, W * 0.28);
+      sunGlow.addColorStop(0, isSunset ? 'rgba(255, 237, 213, 0.78)' : 'rgba(255, 255, 255, 0.55)');
+      sunGlow.addColorStop(0.22, isSunset ? 'rgba(251, 146, 60, 0.36)' : 'rgba(186, 230, 253, 0.22)');
+      sunGlow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = sunGlow;
+      ctx.fillRect(0, 0, W, horizonY + 80);
+
+      if (isSunset) {
+        const streak = ctx.createLinearGradient(sunX - W * 0.32, sunY, sunX + W * 0.32, sunY);
+        streak.addColorStop(0, 'rgba(251, 146, 60, 0)');
+        streak.addColorStop(0.5, 'rgba(254, 215, 170, 0.28)');
+        streak.addColorStop(1, 'rgba(251, 146, 60, 0)');
+        ctx.fillStyle = streak;
+        ctx.fillRect(sunX - W * 0.32, sunY - 2, W * 0.64, 4);
       }
       ctx.restore();
     }
 
     // Horizon atmospheric haze
-    const hazeGrad = ctx.createLinearGradient(0, horizonY - 45, 0, horizonY + 20);
+    const hazeGrad = ctx.createLinearGradient(0, horizonY - 45, 0, horizonY + 22);
     hazeGrad.addColorStop(0, 'rgba(0,0,0,0)');
     hazeGrad.addColorStop(
       1,
-      isNight ? 'rgba(11, 18, 32, 0.90)' : isRain ? 'rgba(71, 85, 105, 0.82)' : isSunset ? 'rgba(194, 106, 90, 0.62)' : 'rgba(199, 223, 247, 0.58)'
+      isNight ? 'rgba(11, 18, 32, 0.92)' : isRain ? 'rgba(71, 85, 105, 0.84)' : isSunset ? 'rgba(194, 106, 90, 0.62)' : 'rgba(199, 223, 247, 0.58)'
     );
     ctx.fillStyle = hazeGrad;
-    ctx.fillRect(0, horizonY - 45, W, 68);
+    ctx.fillRect(0, horizonY - 45, W, 70);
 
-    // 3. PERSPECTIVE TERRAIN GROUND BASE
+    // 3. PERSPECTIVE TERRAIN GROUND BASE + DEPTH BANDS
     const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
     if (isNight) {
-      groundGrad.addColorStop(0, '#0a0f18');
-      groundGrad.addColorStop(1, '#06090f');
+      groundGrad.addColorStop(0, '#090e17');
+      groundGrad.addColorStop(1, '#05070c');
     } else if (track.def.theme === 'desert') {
-      groundGrad.addColorStop(0, isSunset ? '#733d21' : '#8e512d');
-      groundGrad.addColorStop(1, isSunset ? '#592e18' : '#733e21');
+      groundGrad.addColorStop(0, isSunset ? '#733d21' : '#945530');
+      groundGrad.addColorStop(1, isSunset ? '#4f2814' : '#6c3a1f');
     } else if (track.def.theme === 'city') {
-      groundGrad.addColorStop(0, '#181c24');
-      groundGrad.addColorStop(1, '#11141b');
+      groundGrad.addColorStop(0, '#1a1f28');
+      groundGrad.addColorStop(1, '#101319');
     } else {
-      groundGrad.addColorStop(0, '#1f3623');
-      groundGrad.addColorStop(1, '#142618');
+      groundGrad.addColorStop(0, '#213926');
+      groundGrad.addColorStop(1, '#122216');
     }
     ctx.fillStyle = groundGrad;
     ctx.fillRect(0, horizonY, W, H - horizonY);
 
+    // Subtle horizontal distance strata so terrain reads with depth
+    for (let band = 0; band < 7; band++) {
+      const zDist = 14 * Math.pow(1.48, band);
+      const yTop = horizonY + ((camHeight) / (zDist * 1.4)) * focalY;
+      const yBot = horizonY + ((camHeight) / zDist) * focalY;
+      if (yBot > H) continue;
+      ctx.fillStyle = band % 2 === 0 ? 'rgba(255,255,255,0.022)' : 'rgba(0,0,0,0.035)';
+      ctx.fillRect(0, Math.min(yTop, yBot), W, Math.abs(yBot - yTop));
+    }
+
     // Coastal ocean bay on horizon when looking North
     if (track.def.theme === 'coastal' && Math.cos(camYaw) < 0.35) {
       const bayTop = horizonY;
-      const bayBottom = horizonY + (H - horizonY) * 0.14;
+      const bayBottom = horizonY + (H - horizonY) * 0.16;
       const bayGrad = ctx.createLinearGradient(0, bayTop, 0, bayBottom);
-      bayGrad.addColorStop(0, isNight ? 'rgba(7, 25, 45, 0.7)' : 'rgba(14, 116, 144, 0.45)');
+      bayGrad.addColorStop(0, isNight ? 'rgba(7, 25, 45, 0.78)' : 'rgba(14, 116, 144, 0.56)');
       bayGrad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = bayGrad;
       ctx.fillRect(0, bayTop, W, bayBottom - bayTop);
@@ -1244,7 +1440,7 @@ export class RealLifeRenderer {
     const curbW = halfW * 0.11;
     const lineW = Math.max(0.28, halfW * 0.032);
     const Z_NEAR = 0.85;
-    const MAX_DIST = 310;
+    const MAX_DIST = 315;
     const MAX_DIST2 = MAX_DIST * MAX_DIST;
 
     interface RoadQuad {
@@ -1296,46 +1492,112 @@ export class RealLifeRenderer {
       ctx.fill();
     };
 
+    const drawGuardrailSpan = (a: TrackSample, b: TrackSample, lat: number, sharpCurve: boolean, idx: number) => {
+      const ca = toCam(a.pos.x + a.right.x * lat, a.pos.z + a.right.z * lat);
+      const cb = toCam(b.pos.x + b.right.x * lat, b.pos.z + b.right.z * lat);
+      if (ca.z < 1.2 || cb.z < 1.2) return;
+      const ba = projectPt(ca.x, 0, ca.z);
+      const bb = projectPt(cb.x, 0, cb.z);
+      const ta = projectPt(ca.x, 1.05, ca.z);
+      const tb = projectPt(cb.x, 1.05, cb.z);
+      const ma = projectPt(ca.x, 0.55, ca.z);
+      const mb = projectPt(cb.x, 0.55, cb.z);
+
+      // Steel rail beam
+      ctx.fillStyle = isNight ? '#334155' : '#94a3b8';
+      ctx.beginPath();
+      ctx.moveTo(ta.sx, ta.sy);
+      ctx.lineTo(tb.sx, tb.sy);
+      ctx.lineTo(mb.sx, mb.sy);
+      ctx.lineTo(ma.sx, ma.sy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Specular rail highlight strip
+      ctx.strokeStyle = isNight ? 'rgba(148,163,184,0.3)' : 'rgba(248,250,252,0.55)';
+      ctx.lineWidth = Math.max(1, 2.2 / Math.max(1, ca.z * 0.08));
+      ctx.beginPath();
+      ctx.moveTo(ta.sx, ta.sy);
+      ctx.lineTo(tb.sx, tb.sy);
+      ctx.stroke();
+
+      // Posts every 2 segments + orange/red reflective chevron strip on sharp curves
+      if (idx % 2 === 0) {
+        const pw = Math.max(1.5, (fovScale / ca.z) * 0.16);
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(ba.sx - pw * 0.5, ta.sy, pw, ba.sy - ta.sy);
+      }
+      if (sharpCurve && idx % 3 === 0) {
+        const cw = Math.max(4, (fovScale / ca.z) * 0.65);
+        const ch = Math.max(4, (focalY / ca.z) * 0.75);
+        ctx.fillStyle = idx % 6 === 0 ? '#f59e0b' : '#ef4444';
+        ctx.fillRect(ta.sx - cw * 0.5, ta.sy - ch * 0.9, cw, ch);
+      }
+    };
+
     for (let qi = 0; qi < visibleQuads.length; qi++) {
       const q = visibleQuads[qi];
       const { a, b, idx } = q;
       const stripBand = Math.floor(idx / 2) % 2 === 0;
+      const grainMod = (idx * 7) % 3;
       const fogT = clamp((q.midZ - 45) / 245, 0, 0.72);
 
-      // Shoulder / Guardrail base
-      drawClippedRibbon(a, b, -halfW - shoulder, halfW + shoulder, stripBand ? '#475569' : '#334155');
+      // Shoulder / Gravel Verge
+      drawClippedRibbon(a, b, -halfW - shoulder, halfW + shoulder, stripBand ? '#4b5563' : '#374151');
 
-      // Left & Right Curbs
+      // Left & Right Curbs with crisp bevel edge
       const curbCol = stripBand ? track.def.curbColors[0] : track.def.curbColors[1];
       drawClippedRibbon(a, b, -halfW - curbW, -halfW, curbCol);
       drawClippedRibbon(a, b, halfW, halfW + curbW, curbCol);
 
-      // Asphalt surface
+      // Multi-tone Textured Asphalt Surface
       const asphaltCol = isRain
-        ? (stripBand ? '#181e28' : '#141922')
+        ? (grainMod === 0 ? '#161b24' : grainMod === 1 ? '#131820' : '#181e28')
         : isNight
-          ? (stripBand ? '#151821' : '#12151d')
-          : (stripBand ? '#282c36' : '#232730');
+          ? (grainMod === 0 ? '#141720' : grainMod === 1 ? '#11141c' : '#171a24')
+          : (grainMod === 0 ? '#272b35' : grainMod === 1 ? '#232730' : '#2b2f3a');
       drawClippedRibbon(a, b, -halfW, halfW, asphaltCol);
 
-      // Rain wet specular streak
-      if (isRain && stripBand) {
-        drawClippedRibbon(a, b, -halfW * 0.45, halfW * 0.45, 'rgba(148, 163, 184, 0.08)');
+      // Dual Rubber Racing-Line Tire Grooves (subtle dark longitudinal tracks)
+      drawClippedRibbon(a, b, -halfW * 0.42, -halfW * 0.24, 'rgba(9, 11, 16, 0.24)');
+      drawClippedRibbon(a, b, halfW * 0.24, halfW * 0.42, 'rgba(9, 11, 16, 0.24)');
+
+      // World-locked Asphalt Tar Expansion Seams & Aggregate Bands on near segments
+      if (q.midZ < 95 && idx % 6 === 0) {
+        drawClippedRibbon(a, b, -halfW + 0.4, halfW - 0.4, 'rgba(10, 12, 16, 0.28)');
+      }
+
+      // Rain wet specular reflection sheen
+      if (isRain) {
+        drawClippedRibbon(a, b, -halfW * 0.52, halfW * 0.52, stripBand ? 'rgba(186, 230, 253, 0.10)' : 'rgba(148, 163, 184, 0.05)');
       }
 
       // Green Pit Repair Lane at s in [0.89, 0.95]
       const sFrac = idx / N;
       if (Math.abs(sFrac - track.pitS) < 0.032) {
-        drawClippedRibbon(a, b, halfW * 0.56, halfW * 0.96, 'rgba(16, 185, 129, 0.45)');
+        drawClippedRibbon(a, b, halfW * 0.56, halfW * 0.96, 'rgba(16, 185, 129, 0.48)');
       }
 
-      // White edge lines
-      drawClippedRibbon(a, b, -halfW + lineW * 0.6, -halfW + lineW * 1.6, 'rgba(248, 250, 252, 0.72)');
-      drawClippedRibbon(a, b, halfW - lineW * 1.6, halfW - lineW * 0.6, 'rgba(248, 250, 252, 0.72)');
+      // Crisp White Edge Lines
+      drawClippedRibbon(a, b, -halfW + lineW * 0.6, -halfW + lineW * 1.6, 'rgba(248, 250, 252, 0.80)');
+      drawClippedRibbon(a, b, halfW - lineW * 1.6, halfW - lineW * 0.6, 'rgba(248, 250, 252, 0.80)');
 
-      // Dashed amber centerline
+      // Dashed Amber Centerline
       if (stripBand) {
-        drawClippedRibbon(a, b, -lineW * 0.55, lineW * 0.55, 'rgba(245, 158, 11, 0.82)');
+        drawClippedRibbon(a, b, -lineW * 0.55, lineW * 0.55, 'rgba(245, 158, 11, 0.86)');
+      }
+
+      // Reflective Cat's-Eye Road Studs on near segments
+      if (q.midZ < 85 && q.midZ > 2.2 && idx % 4 === 0) {
+        for (const latStud of [-halfW + lineW * 1.1, 0, halfW - lineW * 1.1]) {
+          const cs = toCam(a.pos.x + a.right.x * latStud, a.pos.z + a.right.z * latStud);
+          if (cs.z > 1.5) {
+            const sp = projectPt(cs.x, 0.03, cs.z);
+            const r = clamp((fovScale / cs.z) * 0.075, 1.2, 4.2);
+            ctx.fillStyle = latStud === 0 ? 'rgba(251, 191, 36, 0.92)' : 'rgba(248, 250, 252, 0.85)';
+            ctx.fillRect(sp.sx - r, sp.sy - r * 0.5, r * 2, r);
+          }
+        }
       }
 
       // Checkered Start / Finish line
@@ -1357,12 +1619,44 @@ export class RealLifeRenderer {
             : `rgba(186, 210, 235, ${fogT * 0.34})`;
         drawClippedRibbon(a, b, -halfW - shoulder, halfW + shoulder, fogCol);
       }
+
+      // 3D Armco Guardrails & Curve Chevrons on close-to-mid distances
+      if (q.midZ < 175) {
+        const sharpL = a.signedCurvature > 0.18;
+        const sharpR = a.signedCurvature < -0.18;
+        drawGuardrailSpan(a, b, -halfW - shoulder + 0.35, sharpR, idx);
+        drawGuardrailSpan(a, b, halfW + shoulder - 0.35, sharpL, idx);
+      }
     }
 
-    // 5. WORLD-SPACE PROPS, START GANTRY, OPPONENTS & SMOKE (ALL TRUE 3D CAMERA PROJECTED)
+    // 4B. WORLD-SPACE PERSISTENT DRIFT SKIDMARKS ON ASPHALT
+    if (params.skidMarks && params.skidMarks.length > 0) {
+      ctx.save();
+      ctx.lineCap = 'round';
+      for (let i = 0; i < params.skidMarks.length; i++) {
+        const sm = params.skidMarks[i];
+        const c1 = toCam(sm.x1, sm.z1);
+        const c2 = toCam(sm.x2, sm.z2);
+        if (c1.z < 1.0 && c2.z < 1.0) continue;
+        if (c1.z > 120 && c2.z > 120) continue;
+        const az = Math.max(Z_NEAR, c1.z);
+        const bz = Math.max(Z_NEAR, c2.z);
+        const p1 = projectPt(c1.x, 0.01, az);
+        const p2 = projectPt(c2.x, 0.01, bz);
+        ctx.strokeStyle = `rgba(9, 10, 14, ${clamp(sm.alpha * 0.58, 0.05, 0.58)})`;
+        ctx.lineWidth = clamp((fovScale / ((az + bz) * 0.5)) * 0.24, 1.2, 9);
+        ctx.beginPath();
+        ctx.moveTo(p1.sx, p1.sy);
+        ctx.lineTo(p2.sx, p2.sy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // 5. WORLD-SPACE PROPS, GANTRY, OPPONENTS & SMOKE (TRUE 3D CAMERA PROJECTED)
     const drawList: Array<{ z: number; fn: () => void }> = [];
 
-    // Start / Finish Gantry Pillars
+    // Start / Finish Gantry with Truss Lattice & Live Countdown Signal Lights
     const st = samps[0];
     const gL = toCam(st.pos.x - st.right.x * (halfW + 1.4), st.pos.z - st.right.z * (halfW + 1.4));
     const gR = toCam(st.pos.x + st.right.x * (halfW + 1.4), st.pos.z + st.right.z * (halfW + 1.4));
@@ -1373,14 +1667,30 @@ export class RealLifeRenderer {
         fn: () => {
           const pL = projectPt(gL.x, 0, gL.z);
           const pR = projectPt(gR.x, 0, gR.z);
-          const topL = projectPt(gL.x, 7.8, gL.z);
-          const topR = projectPt(gR.x, 7.8, gR.z);
-          const pilW = Math.max(4, (fovScale / midZ) * 0.95);
+          const topL = projectPt(gL.x, 8.2, gL.z);
+          const topR = projectPt(gR.x, 8.2, gR.z);
+          const pilW = Math.max(5, (fovScale / midZ) * 1.05);
+
+          // Cast shadow strip across start/finish line
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
+          ctx.beginPath();
+          ctx.moveTo(pL.sx, pL.sy);
+          ctx.lineTo(pR.sx, pR.sy);
+          ctx.lineTo(pR.sx + pilW * 1.4, pR.sy + pilW * 0.7);
+          ctx.lineTo(pL.sx + pilW * 1.4, pL.sy + pilW * 0.7);
+          ctx.closePath();
+          ctx.fill();
+
+          // Steel pillars with metallic edge highlight
           ctx.fillStyle = '#0f172a';
           ctx.fillRect(pL.sx - pilW * 0.5, topL.sy, pilW, pL.sy - topL.sy);
           ctx.fillRect(pR.sx - pilW * 0.5, topR.sy, pilW, pR.sy - topR.sy);
-          const barH = Math.max(8, (focalY / midZ) * 1.7);
-          ctx.fillStyle = '#181b24';
+          ctx.fillStyle = '#334155';
+          ctx.fillRect(pL.sx - pilW * 0.5, topL.sy, Math.max(1.5, pilW * 0.25), pL.sy - topL.sy);
+          ctx.fillRect(pR.sx - pilW * 0.5, topR.sy, Math.max(1.5, pilW * 0.25), pR.sy - topR.sy);
+
+          const barH = Math.max(10, (focalY / midZ) * 1.9);
+          ctx.fillStyle = '#111827';
           ctx.beginPath();
           ctx.moveTo(topL.sx - pilW * 0.6, topL.sy);
           ctx.lineTo(topR.sx + pilW * 0.6, topR.sy);
@@ -1388,20 +1698,45 @@ export class RealLifeRenderer {
           ctx.lineTo(topL.sx - pilW * 0.6, topL.sy + barH);
           ctx.closePath();
           ctx.fill();
+
+          // Amber LED trim line along gantry bottom
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = Math.max(1, barH * 0.08);
+          ctx.beginPath();
+          ctx.moveTo(topL.sx - pilW * 0.5, topL.sy + barH);
+          ctx.lineTo(topR.sx + pilW * 0.5, topR.sy + barH);
+          ctx.stroke();
+
           if (barH > 14) {
             const midX = (topL.sx + topR.sx) * 0.5;
-            const midY = (topL.sy + topR.sy) * 0.5 + barH * 0.5;
-            ctx.fillStyle = '#f59e0b';
-            ctx.font = `800 ${Math.max(9, Math.round(barH * 0.62))}px system-ui, sans-serif`;
+            const midY = (topL.sy + topR.sy) * 0.5 + barH * 0.42;
+            ctx.fillStyle = '#f8fafc';
+            ctx.font = `800 ${Math.max(9, Math.round(barH * 0.44))}px system-ui, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('APEX RUSH', midX, midY);
+
+            // 5 Race Countdown Signal Pods
+            const lightY = (topL.sy + topR.sy) * 0.5 + barH * 0.80;
+            const podSpan = (topR.sx - topL.sx) * 0.36;
+            const podR = Math.max(2.2, barH * 0.13);
+            const cdStep = params.countdownStep ?? 4;
+            const isActive = params.raceActive ?? true;
+            for (let pod = 0; pod < 5; pod++) {
+              const lx = midX - podSpan * 0.5 + (pod / 4) * podSpan;
+              const litRed = !isActive && cdStep <= 3 && pod <= (3 - cdStep + 1);
+              const litGreen = isActive;
+              ctx.fillStyle = litGreen ? '#22c55e' : litRed ? '#ef4444' : '#334155';
+              ctx.beginPath();
+              ctx.arc(lx, lightY, podR, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
         }
       });
     }
 
-    // Roadside Props (buildings, trees, mesas, lamps, traffic lights, grandstands)
+    // 4K Shaded Roadside Props
     for (let i = 0; i < track.props.length; i++) {
       const pr = track.props[i];
       const cp = toCam(pr.x, pr.z);
@@ -1409,7 +1744,7 @@ export class RealLifeRenderer {
       const basePt = projectPt(cp.x, 0, cp.z);
       const pw = Math.max(2, (pr.w / cp.z) * fovScale);
       const ph = Math.max(4, (pr.h / cp.z) * focalY);
-      if (basePt.sx + pw < -60 || basePt.sx - pw > W + 60) continue;
+      if (basePt.sx + pw < -80 || basePt.sx - pw > W + 80) continue;
 
       drawList.push({
         z: cp.z,
@@ -1417,65 +1752,152 @@ export class RealLifeRenderer {
           const px = basePt.sx;
           const py = basePt.sy;
           if (pr.kind === 'lamp') {
+            const postW = Math.max(2, pw * 0.45);
             ctx.fillStyle = '#334155';
-            ctx.fillRect(px - Math.max(1, pw * 0.25), py - ph, Math.max(2, pw * 0.5), ph);
+            ctx.fillRect(px - postW * 0.5, py - ph, postW, ph);
+            // Cantilevered lamp arm toward road
+            const armDir = pr.lateral > 0 ? -1 : 1;
+            ctx.fillRect(px, py - ph, armDir * pw * 2.1, Math.max(2, postW * 0.7));
+            const bulbX = px + armDir * pw * 2.0;
+            const bulbY = py - ph + postW * 0.4;
             ctx.fillStyle = pr.accent || '#fde68a';
-            const br = Math.max(2, pw * 0.7);
+            const br = Math.max(2, pw * 0.72);
             ctx.beginPath();
-            ctx.arc(px, py - ph, br, 0, Math.PI * 2);
+            ctx.arc(bulbX, bulbY, br, 0, Math.PI * 2);
             ctx.fill();
-            if (isNight || isSunset) {
-              const halo = ctx.createRadialGradient(px, py - ph, 1, px, py - ph, br * 5.5);
-              halo.addColorStop(0, 'rgba(253, 230, 138, 0.35)');
+            if (isNight || isSunset || isRain) {
+              const halo = ctx.createRadialGradient(bulbX, bulbY, 1, bulbX, bulbY, br * 7.5);
+              halo.addColorStop(0, 'rgba(253, 230, 138, 0.42)');
               halo.addColorStop(1, 'rgba(253, 230, 138, 0)');
               ctx.fillStyle = halo;
               ctx.beginPath();
-              ctx.arc(px, py - ph, br * 5.5, 0, Math.PI * 2);
+              ctx.arc(bulbX, bulbY, br * 7.5, 0, Math.PI * 2);
               ctx.fill();
             }
           } else if (pr.kind === 'traffic') {
             ctx.fillStyle = '#1e293b';
             ctx.fillRect(px - pw * 0.18, py - ph, Math.max(2, pw * 0.36), ph);
-            ctx.fillStyle = '#0f172a';
-            ctx.fillRect(px - pw * 0.6, py - ph, pw * 1.2, ph * 0.26);
-            ctx.fillStyle = pr.accent || '#22c55e';
+            ctx.fillStyle = '#090d16';
+            ctx.fillRect(px - pw * 0.6, py - ph, pw * 1.2, ph * 0.28);
+            const sigCol = pr.accent || '#22c55e';
+            ctx.fillStyle = sigCol;
             ctx.beginPath();
-            ctx.arc(px, py - ph * 0.87, Math.max(2, pw * 0.28), 0, Math.PI * 2);
+            ctx.arc(px, py - ph * 0.86, Math.max(2.2, pw * 0.28), 0, Math.PI * 2);
             ctx.fill();
+            if (isNight || isSunset) {
+              const tg = ctx.createRadialGradient(px, py - ph * 0.86, 1, px, py - ph * 0.86, pw * 2.4);
+              tg.addColorStop(0, sigCol === '#22c55e' ? 'rgba(34,197,94,0.45)' : 'rgba(245,158,11,0.45)');
+              tg.addColorStop(1, 'rgba(0,0,0,0)');
+              ctx.fillStyle = tg;
+              ctx.beginPath();
+              ctx.arc(px, py - ph * 0.86, pw * 2.4, 0, Math.PI * 2);
+              ctx.fill();
+            }
           } else if (pr.kind === 'tree') {
-            ctx.fillStyle = '#4a3525';
-            ctx.fillRect(px - pw * 0.1, py - ph * 0.35, Math.max(2, pw * 0.2), ph * 0.35);
-            ctx.fillStyle = isNight ? '#0d2617' : pr.color;
+            // Soft cast ground shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
             ctx.beginPath();
-            ctx.moveTo(px, py - ph);
-            ctx.lineTo(px - pw * 0.55, py - ph * 0.25);
-            ctx.lineTo(px + pw * 0.55, py - ph * 0.25);
-            ctx.closePath();
+            ctx.ellipse(px + pw * 0.15, py, pw * 0.56, Math.max(2, pw * 0.16), 0, 0, Math.PI * 2);
             ctx.fill();
-          } else if (pr.kind === 'building' || pr.kind === 'stand') {
-            ctx.fillStyle = isNight ? '#111827' : pr.color;
-            ctx.fillRect(px - pw * 0.5, py - ph, pw, ph);
-            if (pr.kind === 'building' && (isNight || isSunset) && pw > 14) {
-              ctx.fillStyle = 'rgba(253, 224, 71, 0.28)';
-              const cols = Math.max(2, Math.floor(pw / 10));
-              const rows = Math.max(3, Math.floor(ph / 14));
+            // Trunk
+            ctx.fillStyle = '#3e2723';
+            ctx.fillRect(px - pw * 0.1, py - ph * 0.34, Math.max(2, pw * 0.2), ph * 0.34);
+            // Multi-tiered volumetric foliage (shadow + sunlit edge)
+            const tiers = 3;
+            const baseCol = isNight ? '#0a2214' : pr.color;
+            const hiCol = isNight ? '#123821' : isSunset ? '#3b6e3c' : '#2d6a4f';
+            for (let t = 0; t < tiers; t++) {
+              const tTop = py - ph * (0.58 + t * 0.21);
+              const tBot = py - ph * (0.20 + t * 0.20);
+              const tHalf = pw * (0.58 - t * 0.13);
+              ctx.fillStyle = baseCol;
+              ctx.beginPath();
+              ctx.moveTo(px, tTop);
+              ctx.lineTo(px - tHalf, tBot);
+              ctx.lineTo(px + tHalf, tBot);
+              ctx.closePath();
+              ctx.fill();
+
+              // Sunlit left facet
+              ctx.fillStyle = hiCol;
+              ctx.beginPath();
+              ctx.moveTo(px, tTop);
+              ctx.lineTo(px - tHalf, tBot);
+              ctx.lineTo(px - tHalf * 0.12, tBot);
+              ctx.closePath();
+              ctx.fill();
+            }
+          } else if (pr.kind === 'building') {
+            const bx = px - pw * 0.5;
+            const by = py - ph;
+            // 3D depth side extrusion
+            const sideW = clamp((px - W * 0.5) * -0.06, -pw * 0.28, pw * 0.28);
+            ctx.fillStyle = isNight ? '#090d16' : '#161b26';
+            if (Math.abs(sideW) > 1.5) {
+              ctx.beginPath();
+              const edgeX = sideW > 0 ? bx + pw : bx;
+              ctx.moveTo(edgeX, by);
+              ctx.lineTo(edgeX + sideW, by + Math.abs(sideW) * 0.25);
+              ctx.lineTo(edgeX + sideW, py);
+              ctx.lineTo(edgeX, py);
+              ctx.closePath();
+              ctx.fill();
+            }
+            // Main glass-and-concrete facade gradient
+            const bGrad = ctx.createLinearGradient(bx, by, bx, py);
+            bGrad.addColorStop(0, isNight ? '#151d2e' : isSunset ? '#3b3444' : '#334155');
+            bGrad.addColorStop(1, isNight ? '#0b0f18' : pr.color);
+            ctx.fillStyle = bGrad;
+            ctx.fillRect(bx, by, pw, ph);
+
+            // Reflective glass curtain wall horizontal mullions & lit windows
+            if (pw > 12) {
+              const cols = Math.max(2, Math.floor(pw / 9));
+              const rows = Math.max(3, Math.floor(ph / 13));
               for (let r = 1; r < rows; r += 2) {
                 for (let c = 0; c < cols; c++) {
-                  if ((r + c) % 2 === 0) {
-                    ctx.fillRect(px - pw * 0.42 + c * ((pw * 0.84) / cols), py - ph + r * (ph / rows), pw * 0.12, ph * 0.04);
+                  const lit = (r * 3 + c * 5) % 4 !== 0;
+                  if (isNight || isSunset) {
+                    ctx.fillStyle = lit ? 'rgba(253, 230, 138, 0.34)' : 'rgba(148, 163, 184, 0.10)';
+                  } else {
+                    ctx.fillStyle = 'rgba(186, 230, 253, 0.22)';
                   }
+                  ctx.fillRect(px - pw * 0.43 + c * ((pw * 0.86) / cols), by + r * (ph / rows), pw * 0.13, ph * 0.045);
                 }
               }
             }
+            // Rooftop aviation warning light at night/sunset
+            if ((isNight || isSunset) && ph > 24) {
+              ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+              ctx.beginPath();
+              ctx.arc(px, by - 2, Math.max(1.5, pw * 0.04), 0, Math.PI * 2);
+              ctx.fill();
+            }
+          } else if (pr.kind === 'stand') {
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(px - pw * 0.5, py - ph, pw, ph);
+            // Stadium awning + crowd rows
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(px - pw * 0.52, py - ph, pw * 1.04, Math.max(3, ph * 0.16));
+            ctx.fillStyle = '#475569';
+            for (let tier = 0; tier < 4; tier++) {
+              ctx.fillRect(px - pw * 0.46, py - ph * (0.2 + tier * 0.16), pw * 0.92, Math.max(1.5, ph * 0.06));
+            }
           } else if (pr.kind === 'mesa') {
-            ctx.fillStyle = isNight ? '#2b160e' : pr.color;
+            const mGrad = ctx.createLinearGradient(px - pw * 0.5, py - ph, px + pw * 0.5, py);
+            mGrad.addColorStop(0, isNight ? '#3d1e12' : isSunset ? '#b4532a' : '#a84c27');
+            mGrad.addColorStop(1, isNight ? '#1f0e08' : '#5e2914');
+            ctx.fillStyle = mGrad;
             ctx.beginPath();
             ctx.moveTo(px - pw * 0.5, py);
-            ctx.lineTo(px - pw * 0.32, py - ph);
+            ctx.lineTo(px - pw * 0.34, py - ph);
             ctx.lineTo(px + pw * 0.32, py - ph);
             ctx.lineTo(px + pw * 0.5, py);
             ctx.closePath();
             ctx.fill();
+            // Horizontal sandstone geological strata highlight
+            ctx.fillStyle = isNight ? 'rgba(255,255,255,0.04)' : 'rgba(253, 186, 116, 0.18)';
+            ctx.fillRect(px - pw * 0.36, py - ph * 0.62, pw * 0.72, Math.max(2, ph * 0.08));
           }
         }
       });
@@ -1541,7 +1963,6 @@ export class RealLifeRenderer {
       });
     }
 
-    // In Photo Mode, also project the player car through the world camera so orbiting works smoothly
     if (params.isPhoto) {
       oppList.push({
         x: player.x,
@@ -1583,12 +2004,13 @@ export class RealLifeRenderer {
             (opp.roll || 0) + clamp(Math.sin(yawDiff) * 0.03, -0.03, 0.03),
             0,
             opp.spoiler || 'street',
-            opp.wheels || '5spoke'
+            opp.wheels || '5spoke',
+            weather
           )
       });
     });
 
-    // Smoke puffs in true camera space
+    // Volumetric Smoke Puffs
     for (let i = 0; i < smokeData.length; i++) {
       const sm = smokeData[i];
       if (!sm.active) continue;
@@ -1600,9 +2022,13 @@ export class RealLifeRenderer {
         z: cp.z,
         fn: () => {
           const t = sm.life / sm.maxLife;
-          ctx.fillStyle = `rgba(226, 232, 240, ${(1 - t) * 0.36})`;
+          const r = Math.max(3, sm.scale * scale * 0.85);
+          const sg = ctx.createRadialGradient(pt.sx, pt.sy, r * 0.1, pt.sx, pt.sy, r);
+          sg.addColorStop(0, `rgba(226, 232, 240, ${(1 - t) * 0.38})`);
+          sg.addColorStop(1, 'rgba(226, 232, 240, 0)');
+          ctx.fillStyle = sg;
           ctx.beginPath();
-          ctx.arc(pt.sx, pt.sy, Math.max(2, sm.scale * scale * 0.72), 0, Math.PI * 2);
+          ctx.arc(pt.sx, pt.sy, r, 0, Math.PI * 2);
           ctx.fill();
         }
       });
@@ -1614,16 +2040,17 @@ export class RealLifeRenderer {
     // 6. NIGHT HEADLIGHT BEAM CONE ON ASPHALT
     if (isNight && !params.isPhoto) {
       ctx.save();
+      ctx.globalCompositeOperation = 'screen';
       const beamGrad = ctx.createRadialGradient(W * 0.5, H * 0.85, 20, W * 0.5, horizonY + 80, W * 0.45);
-      beamGrad.addColorStop(0, 'rgba(255, 244, 214, 0.28)');
-      beamGrad.addColorStop(0.6, 'rgba(255, 244, 214, 0.08)');
+      beamGrad.addColorStop(0, 'rgba(255, 244, 214, 0.34)');
+      beamGrad.addColorStop(0.55, 'rgba(255, 244, 214, 0.11)');
       beamGrad.addColorStop(1, 'rgba(255, 244, 214, 0)');
       ctx.fillStyle = beamGrad;
       ctx.beginPath();
-      ctx.moveTo(W * 0.32, H);
-      ctx.lineTo(W * 0.20, horizonY + 12);
-      ctx.lineTo(W * 0.80, horizonY + 12);
-      ctx.lineTo(W * 0.68, H);
+      ctx.moveTo(W * 0.31, H);
+      ctx.lineTo(W * 0.19, horizonY + 12);
+      ctx.lineTo(W * 0.81, horizonY + 12);
+      ctx.lineTo(W * 0.69, H);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
@@ -1649,7 +2076,6 @@ export class RealLifeRenderer {
         ctx.restore();
       }
     } else {
-      // Player car projected at its real world distance ahead of chase camera (~6.35m)
       const pCam = toCam(player.x, player.z);
       const pZ = Math.max(4.8, pCam.z);
       const pScale = fovScale / pZ;
@@ -1663,12 +2089,12 @@ export class RealLifeRenderer {
         for (const side of [-1, 1]) {
           const sx = carX + side * pScale * 0.92;
           const sy = carY - pScale * 0.08;
-          const sg = ctx.createRadialGradient(sx, sy, 2, sx, sy, pScale * 0.62);
-          sg.addColorStop(0, 'rgba(226, 232, 240, 0.42)');
+          const sg = ctx.createRadialGradient(sx, sy, 2, sx, sy, pScale * 0.68);
+          sg.addColorStop(0, 'rgba(226, 232, 240, 0.44)');
           sg.addColorStop(1, 'rgba(226, 232, 240, 0)');
           ctx.fillStyle = sg;
           ctx.beginPath();
-          ctx.arc(sx, sy, pScale * 0.62, 0, Math.PI * 2);
+          ctx.arc(sx, sy, pScale * 0.68, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -1685,7 +2111,8 @@ export class RealLifeRenderer {
         steerRoll,
         bounce,
         player.spoiler || 'street',
-        player.wheels || '5spoke'
+        player.wheels || '5spoke',
+        weather
       );
     }
   }
@@ -1702,11 +2129,12 @@ export class RealLifeRenderer {
     rollRad: number,
     bouncePx: number,
     spoilerStyle = 'street',
-    wheelStyle = '5spoke'
+    wheelStyle = '5spoke',
+    weather = 'sunset'
   ) {
     const ctx = this.ctx;
     const sprite = this.getCarSprite('chase', colorHex, isGhost);
-    const carW = clamp(unitScale * 2.35, 10, 560);
+    const carW = clamp(unitScale * 2.35, 10, 580);
     const aspect = sprite ? sprite.height / sprite.width : 0.65;
     const carH = carW * aspect;
     if (carW < 8) return;
@@ -1715,16 +2143,26 @@ export class RealLifeRenderer {
     ctx.translate(cx, baseY + bouncePx);
     if (rollRad) ctx.rotate(rollRad);
 
-    // Contact shadow grounded directly under tires
+    // Multi-pass Ground Ambient Occlusion + Directional Sun Shadow
     if (!isGhost) {
-      const shGrad = ctx.createRadialGradient(0, -carH * 0.04, carW * 0.1, 0, -carH * 0.04, carW * 0.56);
-      shGrad.addColorStop(0, 'rgba(0, 0, 0, 0.72)');
-      shGrad.addColorStop(0.7, 'rgba(0, 0, 0, 0.32)');
+      const sunShift = weather === 'sunset' ? carW * 0.10 : carW * 0.05;
+      const shGrad = ctx.createRadialGradient(sunShift, -carH * 0.03, carW * 0.12, sunShift, -carH * 0.03, carW * 0.60);
+      shGrad.addColorStop(0, 'rgba(0, 0, 0, 0.80)');
+      shGrad.addColorStop(0.65, 'rgba(0, 0, 0, 0.36)');
       shGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = shGrad;
       ctx.beginPath();
-      ctx.ellipse(0, -carH * 0.04, carW * 0.54, carH * 0.14, 0, 0, Math.PI * 2);
+      ctx.ellipse(sunShift, -carH * 0.03, carW * 0.58, carH * 0.15, 0, 0, Math.PI * 2);
       ctx.fill();
+
+      // Wet rain asphalt mirror reflection of taillights under car
+      if (weather === 'rain' && carW > 36) {
+        const refGrad = ctx.createLinearGradient(0, 0, 0, carH * 0.24);
+        refGrad.addColorStop(0, braking ? 'rgba(239, 68, 68, 0.28)' : 'rgba(148, 163, 184, 0.16)');
+        refGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = refGrad;
+        ctx.fillRect(-carW * 0.42, 0, carW * 0.84, carH * 0.24);
+      }
     }
 
     if (sprite) {
@@ -1734,7 +2172,24 @@ export class RealLifeRenderer {
       ctx.fillRect(-carW * 0.45, -carH * 0.85, carW * 0.9, carH * 0.8);
     }
 
-    // Customized Rear Spoiler visual overlay (GT Carbon Wing / Ducktail / Stock Lip)
+    // Dynamic Clearcoat Roof/Shoulder Rim Sheen matched to environment lighting
+    if (!isGhost && carW > 56) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.strokeStyle = weather === 'sunset'
+        ? 'rgba(253, 186, 116, 0.32)'
+        : weather === 'night'
+          ? 'rgba(148, 163, 184, 0.22)'
+          : 'rgba(248, 250, 252, 0.28)';
+      ctx.lineWidth = Math.max(1.2, carH * 0.015);
+      ctx.beginPath();
+      ctx.moveTo(-carW * 0.22, -carH * 0.88);
+      ctx.quadraticCurveTo(0, -carH * 0.91, carW * 0.22, -carH * 0.88);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Customized Rear Spoiler visual overlay
     if (!isGhost && carW > 38) {
       if (spoilerStyle === 'gt') {
         ctx.fillStyle = '#0f172a';
@@ -1742,6 +2197,8 @@ export class RealLifeRenderer {
         ctx.fillRect(carW * 0.178, -carH * 0.90, carW * 0.032, carH * 0.14);
         ctx.fillStyle = '#111827';
         ctx.fillRect(-carW * 0.44, -carH * 0.95, carW * 0.88, Math.max(3, carH * 0.055));
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(-carW * 0.44, -carH * 0.95, carW * 0.88, Math.max(1, carH * 0.014));
         ctx.fillStyle = '#334155';
         ctx.fillRect(-carW * 0.45, -carH * 0.99, carW * 0.032, carH * 0.11);
         ctx.fillRect(carW * 0.418, -carH * 0.99, carW * 0.032, carH * 0.11);
@@ -1757,45 +2214,51 @@ export class RealLifeRenderer {
       }
     }
 
-    // Subtle wheel rim accent bar inside rear wheel arches when close
+    // Wheel rim lip accent inside rear arches
     if (!isGhost && carW > 95 && wheelStyle !== '5spoke') {
-      ctx.fillStyle = wheelStyle === 'deep' ? 'rgba(245, 158, 11, 0.55)'
-        : wheelStyle === 'mesh' ? 'rgba(226, 232, 240, 0.45)'
-          : 'rgba(15, 23, 42, 0.65)';
+      ctx.fillStyle = wheelStyle === 'deep' ? 'rgba(245, 158, 11, 0.58)'
+        : wheelStyle === 'mesh' ? 'rgba(226, 232, 240, 0.48)'
+          : 'rgba(15, 23, 42, 0.68)';
       ctx.fillRect(-carW * 0.47, -carH * 0.22, carW * 0.025, carH * 0.14);
       ctx.fillRect(carW * 0.445, -carH * 0.22, carW * 0.025, carH * 0.14);
     }
 
-    // Taillight / Brake glow flares
+    // Volumetric Taillight & Center Third Brake Light (CHMSL) Flares
     if (braking && !isGhost) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const side of [-1, 1]) {
         const lx = side * carW * 0.31;
         const ly = -carH * 0.53;
-        const tg = ctx.createRadialGradient(lx, ly, 1, lx, ly, carW * 0.15);
-        tg.addColorStop(0, 'rgba(255, 70, 70, 0.95)');
-        tg.addColorStop(0.45, 'rgba(239, 68, 68, 0.45)');
+        const tg = ctx.createRadialGradient(lx, ly, 1, lx, ly, carW * 0.17);
+        tg.addColorStop(0, 'rgba(255, 180, 180, 0.98)');
+        tg.addColorStop(0.28, 'rgba(239, 68, 68, 0.82)');
         tg.addColorStop(1, 'rgba(239, 68, 68, 0)');
         ctx.fillStyle = tg;
         ctx.beginPath();
-        ctx.arc(lx, ly, carW * 0.15, 0, Math.PI * 2);
+        ctx.arc(lx, ly, carW * 0.17, 0, Math.PI * 2);
         ctx.fill();
+      }
+      // Third brake light strip under rear window
+      if (carW > 65) {
+        ctx.fillStyle = 'rgba(255, 90, 90, 0.92)';
+        ctx.fillRect(-carW * 0.09, -carH * 0.72, carW * 0.18, Math.max(2, carH * 0.024));
       }
       ctx.restore();
     }
 
-    // Twin Nitro exhaust flames
+    // Twin Titanium Plasma Nitro Exhaust Afterburner
     if (nitroActive && !isGhost) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const side of [-1, 1]) {
         const ex = side * carW * 0.28;
         const ey = -carH * 0.17;
-        const r = carW * (0.08 + Math.random() * 0.04);
+        const r = carW * (0.095 + Math.random() * 0.045);
         const fg = ctx.createRadialGradient(ex, ey, 1, ex, ey, r);
-        fg.addColorStop(0, 'rgba(224, 242, 254, 0.98)');
-        fg.addColorStop(0.45, 'rgba(56, 189, 248, 0.82)');
+        fg.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        fg.addColorStop(0.32, 'rgba(125, 211, 252, 0.94)');
+        fg.addColorStop(0.68, 'rgba(37, 99, 235, 0.52)');
         fg.addColorStop(1, 'rgba(37, 99, 235, 0)');
         ctx.fillStyle = fg;
         ctx.beginPath();
@@ -1806,9 +2269,9 @@ export class RealLifeRenderer {
     }
 
     if (label && carW > 24) {
-      ctx.fillStyle = 'rgba(8, 9, 12, 0.78)';
+      ctx.fillStyle = 'rgba(8, 9, 12, 0.82)';
       ctx.fillRect(-46, -carH - 26, 92, 20);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.24)';
       ctx.strokeRect(-46, -carH - 26, 92, 20);
       ctx.fillStyle = '#f8fafc';
       ctx.font = '700 11px system-ui, sans-serif';
@@ -1827,6 +2290,7 @@ export class RealLifeRenderer {
     remotes: Map<string, any>;
     ghostCar: { x: number; z: number; h: number; color: string } | null;
     smokeData: any[];
+    skidMarks?: SkidSegment[];
     isPhoto: boolean;
     orbitDist: number;
     keys: { brake: boolean; drift: boolean };
@@ -1846,12 +2310,10 @@ export class RealLifeRenderer {
 
     ctx.save();
     ctx.translate(W * 0.5, H * 0.62);
-    // Rotate world so player heading always points UP (-Y)
     ctx.rotate(player.heading - Math.PI);
     ctx.scale(pxPerM, pxPerM);
     ctx.translate(-player.x, -player.z);
 
-    // Coastal bay
     if (track.def.theme === 'coastal') {
       ctx.fillStyle = isNight ? '#0a1f33' : '#0369a1';
       ctx.fillRect(-1000, -1200, 2000, 750);
@@ -1860,7 +2322,6 @@ export class RealLifeRenderer {
     const samps = track.samples;
     const N = track.sampleCount;
 
-    // Outer shoulder/guardrail ribbon
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -1873,12 +2334,15 @@ export class RealLifeRenderer {
     ctx.lineWidth = (track.halfW + track.shoulder) * 2;
     ctx.stroke();
 
-    // Asphalt road ribbon
     ctx.strokeStyle = isRain ? '#151922' : '#21252e';
     ctx.lineWidth = track.halfW * 2;
     ctx.stroke();
 
-    // Center dashed line
+    // Rubber racing groove ribbon
+    ctx.strokeStyle = 'rgba(8, 10, 14, 0.28)';
+    ctx.lineWidth = track.halfW * 0.9;
+    ctx.stroke();
+
     ctx.save();
     ctx.strokeStyle = 'rgba(245, 158, 11, 0.72)';
     ctx.lineWidth = 0.4;
@@ -1886,7 +2350,21 @@ export class RealLifeRenderer {
     ctx.stroke();
     ctx.restore();
 
-    // Green pit strip
+    // Persistent drift skidmarks in drone view
+    if (params.skidMarks && params.skidMarks.length > 0) {
+      ctx.save();
+      ctx.lineWidth = 0.28;
+      for (let i = 0; i < params.skidMarks.length; i++) {
+        const sm = params.skidMarks[i];
+        ctx.strokeStyle = `rgba(9, 10, 14, ${clamp(sm.alpha * 0.55, 0.05, 0.55)})`;
+        ctx.beginPath();
+        ctx.moveTo(sm.x1, sm.z1);
+        ctx.lineTo(sm.x2, sm.z2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     const pitIdx = Math.floor(track.pitS * N);
     const pitSamp = samps[pitIdx];
     ctx.save();
@@ -1896,7 +2374,6 @@ export class RealLifeRenderer {
     ctx.fillRect(-2, -18, 4, 36);
     ctx.restore();
 
-    // Start/Finish checkered line
     const st = samps[0];
     ctx.save();
     ctx.translate(st.pos.x, st.pos.z);
@@ -1909,17 +2386,20 @@ export class RealLifeRenderer {
     }
     ctx.restore();
 
-    // Scenery props
     const viewRad = Math.max(W, H) / pxPerM + 60;
     for (let i = 0; i < track.props.length; i++) {
       const pr = track.props[i];
       if (Math.abs(pr.x - player.x) > viewRad || Math.abs(pr.z - player.z) > viewRad) continue;
       if (pr.kind === 'building' || pr.kind === 'stand') {
-        ctx.fillStyle = 'rgba(0,0,0,0.35)';
-        ctx.fillRect(pr.x - pr.w * 0.5 + 1.5, pr.z - pr.w * 0.5 + 1.5, pr.w, pr.w);
+        ctx.fillStyle = 'rgba(0,0,0,0.40)';
+        ctx.fillRect(pr.x - pr.w * 0.5 + 1.8, pr.z - pr.w * 0.5 + 1.8, pr.w, pr.w);
         ctx.fillStyle = pr.color;
         ctx.fillRect(pr.x - pr.w * 0.5, pr.z - pr.w * 0.5, pr.w, pr.w);
       } else if (pr.kind === 'tree') {
+        ctx.fillStyle = 'rgba(0,0,0,0.28)';
+        ctx.beginPath();
+        ctx.arc(pr.x + 0.8, pr.z + 0.8, pr.w * 0.72, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = pr.color;
         ctx.beginPath();
         ctx.arc(pr.x, pr.z, pr.w * 0.7, 0, Math.PI * 2);
@@ -1932,7 +2412,6 @@ export class RealLifeRenderer {
       }
     }
 
-    // Tire smoke
     smokeData.forEach((sm) => {
       if (!sm.active) return;
       const t = sm.life / sm.maxLife;
@@ -1963,7 +2442,7 @@ export class RealLifeRenderer {
       }
 
       if (!isGhost) {
-        ctx.fillStyle = 'rgba(0,0,0,0.48)';
+        ctx.fillStyle = 'rgba(0,0,0,0.52)';
         ctx.beginPath();
         ctx.ellipse(0.35, 0.35, 1.35, 2.55, 0, 0, Math.PI * 2);
         ctx.fill();
